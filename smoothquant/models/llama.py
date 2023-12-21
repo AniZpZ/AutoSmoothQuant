@@ -18,7 +18,6 @@ from transformers.activations import SiLUActivation
 from typing import Optional, Tuple, List
 # must use branch llama-dev in https://github.com/AniZpZ/torch-int
 from torch_int.nn.linear import W8A8BFP32OFP32LinearWithSFactor, W8A8BFP32OFP32Linear
-from smoothquant.fake_quant import W8A8Linear
 from transformers.utils import logging
 logger = logging.get_logger(__name__)
 _CONFIG_FOR_DOC = "LlamaConfig"
