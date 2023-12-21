@@ -1,5 +1,5 @@
 import torch
-from torch_int._CUDA import bmm_s8t_s8n_s8t, bmm_s8t_s8n_s32t
+from auto_smoothquant._CUDA import bmm_s8t_s8n_s8t, bmm_s8t_s8n_s32t
 
 
 def bmm_i8_o8(a, b, scale):

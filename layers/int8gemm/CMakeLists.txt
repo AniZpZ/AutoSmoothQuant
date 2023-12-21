@@ -23,7 +23,6 @@ set(CMAKE_CUDA_STANDARD 14)
 
 set(CUDA_INCLUDE_DIR "/usr/local/cuda/include" CACHE PATH "CUTLASS Header Library")
 # set(PYBIND_INCLUDE_DIR "/usr/local/lib/python3.9/site-packages/pybind11/include" CACHE PATH "PYBIND Header Library")
-# set(PYBIND_INCLUDE_DIR "//home/hadoop-hmart-waimai-rank/int-linear/torch_int/ft_gemm/pybind11/include" CACHE PATH "PYBIND Header Library")
 set(PYTHON_INCLUDE_DIR "/usr/local/include/python3.9" CACHE PATH "PYTHON Header Library")
 set(TORCH_INCLUDE_DIR1 "/usr/local/lib/python3.9/site-packages/torch/include" CACHE PATH "Torch")
 set(TORCH_INCLUDE_DIR2 "/usr/local/lib/python3.9/site-packages/torch/include/torch/csrc/api/include" CACHE PATH "Torch")

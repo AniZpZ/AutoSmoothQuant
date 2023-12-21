@@ -7,10 +7,10 @@ from pathlib import Path
 from transformers import AutoTokenizer
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
 
-from smoothquant.llama import Int8LlamaForCausalLM
-from smoothquant.smooth import smooth_lm
+from models.llama import Int8LlamaForCausalLM
+from models.smooth import smooth_lm
 
-from smoothquant.calibration import get_static_llama_decoder_layer_scales
+from quantize.calibration import get_static_llama_decoder_layer_scales
 from torch.nn.functional import pad
 
 

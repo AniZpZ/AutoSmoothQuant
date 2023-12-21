@@ -7,12 +7,11 @@ setup(
         cpp_extension.CUDAExtension(
             name='auto_smoothquant._CUDA',
             sources=[
-                'torch_int/kernels/linear.cu',
-                'torch_int/kernels/bmm.cu',
-                'torch_int/kernels/fused.cu',
-                'torch_int/kernels/bindings.cpp',
+                'layers/int8gemm/cuda_utils.cc',
+                'layers/int8gemm/cublasINT8MMWrapper.cc',
+                'layers/int8gemm/cublasAlgoMap.cc',
+                'layers/int8gemm/bindings.cpp',
             ],
-            include_dirs=['torch_int/kernels/include'],
             extra_link_args=['-lcublas_static', '-lcublasLt_static',
                              '-lculibos', '-lcudart', '-lcudart_static',
                              '-lrt', '-lpthread', '-ldl', '-L/usr/lib/x86_64-linux-gnu/'],

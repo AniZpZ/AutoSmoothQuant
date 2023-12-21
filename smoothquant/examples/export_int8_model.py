@@ -7,10 +7,10 @@ from pathlib import Path
 from transformers.models.opt.modeling_opt import OPTForCausalLM
 from transformers import AutoTokenizer
 
-from smoothquant.opt import Int8OPTForCausalLM
-from smoothquant.smooth import smooth_lm
+from models.opt import Int8OPTForCausalLM
+from models.smooth import smooth_lm
 
-from smoothquant.calibration import get_static_decoder_layer_scales
+from quantize.calibration import get_static_decoder_layer_scales
 
 
 if __name__ == '__main__':
