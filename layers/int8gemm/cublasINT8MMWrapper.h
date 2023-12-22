@@ -64,7 +64,7 @@ public:
             const int8_t *ATransform, const int8_t *kernel);
 
   void Gemm_(int8_t *res, int batchCount, int m, int n, int k, int64_t stridea,
-             int64_t strideb, int64_t stridec, const float alpha,
+             int64_t strideb, int64_t stridec, const float alpha, const float beta,
              const int8_t *ATransform, const int8_t *kernel);
 
   bool getUseOrderCol322R4R4();

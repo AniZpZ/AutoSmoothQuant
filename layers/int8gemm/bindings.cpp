@@ -23,7 +23,12 @@ public:
   void linear_a8_w8_o8(torch::Tensor &input, torch::Tensor &weight,
                        torch::Tensor &output, float alpha);
   void linear_a8_w8_o8_(torch::Tensor &input, torch::Tensor &weight,
-                       torch::Tensor &output, float alpha);
+                       torch::Tensor &output, float alpha, float beta);
+  torch::Tensor linear_a8_w8_b8_o8_(torch::Tensor &input,  // INT8
+                              torch::Tensor &weight, // INT8
+                              torch::Tensor &bias,    // INT8
+                              float alpha, // FP32
+                              float beta);
 };
 I8CUGEMM::I8CUGEMM() {
   // cublasAlgoMap *cublas_algo_map = new cublasAlgoMap("igemm_config.in");
@@ -97,9 +102,10 @@ void I8CUGEMM::linear_a8_w8_o8(torch::Tensor &input,  // INT8
 }
 
 void I8CUGEMM::linear_a8_w8_o8_(torch::Tensor &input,  // INT8
-                             torch::Tensor &weight, // INT8
-                             torch::Tensor &out,    // INT8
-                             float alpha // FP32
+                              torch::Tensor &weight, // INT8
+                              torch::Tensor &out,    // INT8
+                              float alpha, // FP32
+                              float beta = 0.0f // FP32
 ) {
   int m = input.size(0);
   int n = weight.size(0);
@@ -110,8 +116,29 @@ void I8CUGEMM::linear_a8_w8_o8_(torch::Tensor &input,  // INT8
   int8_t *weight_ptr = weight.data_ptr<int8_t>();
   int8_t *output_ptr = out.data_ptr<int8_t>();
 
-  int8_gemm_wrapper->Gemm_(output_ptr, 1, m, n, k, 0, 0, 0, alpha, input_ptr,
+  int8_gemm_wrapper->Gemm_(output_ptr, 1, m, n, k, 0, 0, 0, alpha, beta, input_ptr,
                           weight_ptr);
+}
+
+torch::Tensor I8CUGEMM::linear_a8_w8_b8_o8_(torch::Tensor &input,  // INT8
+                              torch::Tensor &weight, // INT8
+                              torch::Tensor &bias,    // INT8
+                              float alpha, // FP32
+                              float beta  // FP32
+) {
+  int m = input.size(0);
+  int n = weight.size(0);
+  int k = input.size(1);
+  auto out = bias.view({1, -1}).repeat({m, 1});
+
+  // Set data types
+  int8_t *input_ptr = input.data_ptr<int8_t>();
+  int8_t *weight_ptr = weight.data_ptr<int8_t>();
+  int8_t *output_ptr = out.data_ptr<int8_t>();
+
+  int8_gemm_wrapper->Gemm_(output_ptr, 1, m, n, k, 0, 0, 0, alpha, beta, input_ptr,
+                          weight_ptr);
+  return out;
 }
 
 
@@ -120,6 +147,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def(pybind11::init<>())
       .def("linear_a8_w8_o32", &I8CUGEMM::linear_a8_w8_o32)
       .def("linear_a8_w8_o8", &I8CUGEMM::linear_a8_w8_o8)
-      .def("linear_a8_w8_o8_", &I8CUGEMM::linear_a8_w8_o8_)
-      .def("linear_a8_w8_o32_", &I8CUGEMM::linear_a8_w8_o32_);
+      .def("linear_a8_w8_o8_", &I8CUGEMM::linear_a8_w8_o8_, 
+      py::arg("input"), py::arg("weight"), py::arg("out"),
+      py::arg("alpha"), py::arg("beta") = 0.0f)
+      .def("linear_a8_w8_o32_", &I8CUGEMM::linear_a8_w8_o32_)
+      .def("linear_a8_w8_b8_o8_", &I8CUGEMM::linear_a8_w8_b8_o8_);
 }

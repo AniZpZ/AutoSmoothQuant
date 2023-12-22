@@ -536,7 +536,7 @@ void cublasINT8MMWrapper::Gemm(int8_t *res, int batchCount, int m, int n, int k,
 // computeType: CUBLAS_COMPUTE_32I
 void cublasINT8MMWrapper::Gemm_(int8_t *res, int batchCount, int m, int n,
                                 int k, int64_t stridea, int64_t strideb,
-                                int64_t stridec, const float alpha,
+                                int64_t stridec, const float alpha, const float beta,
                                 const int8_t *ATransform,
                                 const int8_t *kernel) {
   mu_->lock();
@@ -657,7 +657,7 @@ void cublasINT8MMWrapper::Gemm_(int8_t *res, int batchCount, int m, int n,
 #endif
   }
 
-  float beta = 0.0f;
+  // float beta = 0.0f;
   cublasLtMatmul(cublaslt_handle_, matmulDesc, &alpha, kernel, AtransformDesc,
                  ATransform, BtransformDesc, &beta, res, CtransformDesc, res,
                  CtransformDesc, (findAlgo == 1 ? (&algo) : NULL), NULL, 0,
