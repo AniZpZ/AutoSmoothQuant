@@ -1,5 +1,5 @@
 import torch
-from auto_smoothquant._CUDA import dq_add_layernorm_q
+from autosmoothquant._CUDA import dq_add_layernorm_q
 
 
 def dq_add_layernorm_q_py(input_int32, input_scale_fp, residual_input_fp, gamma, beta, eps):

@@ -6,12 +6,11 @@ from pathlib import Path
 
 from transformers import AutoTokenizer
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
-
-from models.llama import Int8LlamaForCausalLM
-from models.smooth import smooth_lm
-
-from quantize.calibration import get_static_llama_decoder_layer_scales
 from torch.nn.functional import pad
+
+from autosmoothquant.models.llama import Int8LlamaForCausalLM
+from autosmoothquant.quantize.smooth import smooth_lm
+from autosmoothquant.quantize.calibration import get_static_llama_decoder_layer_scales
 
 
 if __name__ == '__main__':
@@ -24,7 +23,6 @@ if __name__ == '__main__':
     parser.add_argument("--output-path", type=str, default='int8_models')
     parser.add_argument('--dataset-path', type=str, default='dataset/val.jsonl.zst',
                         help='location of the calibration dataset, we use the validation set of the Pile dataset')
-    parser.add_argument('--export-FT', default=False, action="store_true")
     args = parser.parse_args()
     model = LlamaForCausalLM.from_pretrained(
         args.model_name, device_map="auto", torch_dtype=torch.float16)
@@ -44,14 +42,7 @@ if __name__ == '__main__':
                                                                             num_samples=args.num_samples,
                                                                             seq_len=args.seq_len)
     output_path = Path(args.output_path) / (Path(args.model_name).name + "-smoothquant")
-    if args.export_FT:
-        model.save_pretrained(output_path)
-        print(f"Saved smoothed model at {output_path}")
 
-        output_path = Path(args.output_path) / (Path(args.model_name).name + "-smoothquant-scales.pt")
-        torch.save(raw_scales, output_path)
-        print(f"Saved scaling factors at {output_path}")
-    else:
-        int8_model = Int8LlamaForCausalLM.from_float(model, decoder_layer_scales)
-        int8_model.save_pretrained(output_path)
-        print(f"Saved int8 model at {output_path}")
+    int8_model = Int8LlamaForCausalLM.from_float(model, decoder_layer_scales)
+    int8_model.save_pretrained(output_path)
+    print(f"Saved int8 model at {output_path}")

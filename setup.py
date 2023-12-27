@@ -2,15 +2,15 @@ from setuptools import setup, find_packages
 from torch.utils import cpp_extension
 
 setup(
-    name='auto_smoothquant',
+    name='autosmoothquant',
     ext_modules=[
         cpp_extension.CUDAExtension(
-            name='auto_smoothquant._CUDA',
+            name='autosmoothquant._CUDA',
             sources=[
-                'layers/int8gemm/cuda_utils.cc',
-                'layers/int8gemm/cublasINT8MMWrapper.cc',
-                'layers/int8gemm/cublasAlgoMap.cc',
-                'layers/int8gemm/bindings.cpp',
+                'csrc/int8gemm/cuda_utils.cc',
+                'csrc/int8gemm/cublasINT8MMWrapper.cc',
+                'csrc/int8gemm/cublasAlgoMap.cc',
+                'csrc/int8gemm/bindings.cpp',
             ],
             extra_link_args=['-lcublas_static', '-lcublasLt_static',
                              '-lculibos', '-lcudart', '-lcudart_static',

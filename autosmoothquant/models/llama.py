@@ -16,11 +16,12 @@ from transformers.models.llama.modeling_llama import (
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.activations import SiLUActivation
 from typing import Optional, Tuple, List
-from layers.nn.linear import W8A8BFP32OFP32LinearWithSFactor, W8A8BFP32OFP32Linear
+from autosmoothquant.layers.nn.linear import W8A8BFP32OFP32LinearWithQuantScale, W8A8BFP32OFP32Linear
 from transformers.utils import logging
 logger = logging.get_logger(__name__)
 _CONFIG_FOR_DOC = "LlamaConfig"
-# attention is the same as opt
+
+
 class Int8LlamaAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
     def __init__(
@@ -45,7 +46,7 @@ class Int8LlamaAttention(nn.Module):
         self.v_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.num_heads * self.head_dim)
         self.q_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.num_heads * self.head_dim)
         # out is fp32
-        self.o_proj = W8A8BFP32OFP32LinearWithSFactor(self.num_heads * self.head_dim, self.hidden_size)
+        self.o_proj = W8A8BFP32OFP32LinearWithQuantScale(self.num_heads * self.head_dim, self.hidden_size)
 
         self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
     
@@ -78,7 +79,7 @@ class Int8LlamaAttention(nn.Module):
         int8_module.k_proj = qkv_list[1]
         int8_module.v_proj = qkv_list[2]
 
-        int8_module.o_proj = W8A8BFP32OFP32LinearWithSFactor.from_float(
+        int8_module.o_proj = W8A8BFP32OFP32LinearWithQuantScale.from_float(
             module.o_proj, out_input_scale)
         return int8_module
     
@@ -196,7 +197,7 @@ class Int8LlamaMLP(nn.Module):
         self.gate_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size)
 
         self.up_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size)
-        self.down_proj = W8A8BFP32OFP32LinearWithSFactor(self.intermediate_size, self.hidden_size)
+        self.down_proj = W8A8BFP32OFP32LinearWithQuantScale(self.intermediate_size, self.hidden_size)
         # silu_and_mul_kernel in vLLM can be a reference of SwiGLU
         self.act_fn = SiLUActivation()
     
@@ -224,7 +225,7 @@ class Int8LlamaMLP(nn.Module):
 
         int8Mlp.gate_proj = gateup_list[0]
         int8Mlp.up_proj = gateup_list[1]
-        int8Mlp.down_proj = W8A8BFP32OFP32LinearWithSFactor.from_float(
+        int8Mlp.down_proj = W8A8BFP32OFP32LinearWithQuantScale.from_float(
             module.down_proj, 
             down_input_scale)
 

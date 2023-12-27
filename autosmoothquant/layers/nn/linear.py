@@ -1,7 +1,8 @@
 import torch
 import threading
 from ..functional.quantization import quantize_per_tensor_absmax
-from auto_smoothquant._CUDA import I8CUGEMM
+from autosmoothquant._CUDA import I8CUGEMM
+
 class Int8GEMM(object):
     _instance_lock = threading.Lock()
 
@@ -18,6 +19,7 @@ class Int8GEMM(object):
 
     def get_i8cugemm(self):
         return self.i8cugemm
+
 
 class W8A8BFP32OFP32Linear(torch.nn.Module):
     # For fc2 and out_proj
@@ -213,6 +215,7 @@ class W8A8BFP32OFP32QKVLinear(W8A8BFP32OFP32Linear):
             int8_module.bias = module.bias.to(torch.float32)
             int8_module.bias.requires_grad = False
         return int8_module
+
 
 class W8A8BFP32OFP32LinearWithQuantScale(W8A8BFP32OFP32Linear):
     # For fc2 and out_proj
