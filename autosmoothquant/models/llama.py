@@ -19,7 +19,6 @@ from typing import Optional, Tuple, List
 from autosmoothquant.layers.nn.linear import W8A8BFP32OFP32LinearWithQuantScale, W8A8BFP32OFP32Linear
 from transformers.utils import logging
 logger = logging.get_logger(__name__)
-_CONFIG_FOR_DOC = "LlamaConfig"
 
 
 class Int8LlamaAttention(nn.Module):

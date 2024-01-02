@@ -2,13 +2,11 @@ import torch
 import math
 from torch import nn
 from transformers.activations import ACT2FN
-from typing import Optional, Tuple, List
-from layers.nn.linear import W8A8BFP32OFP32LinearWithSFactor, W8A8BFP32OFP32Linear
 from transformers.utils import logging
-logger = logging.get_logger(__name__)
+from typing import Optional, Tuple, List
 
-import sys
-from thirdparty.baichuan.modeling_baichuan import (
+from autosmoothquant.layers.nn.linear import W8A8BFP32OFP32LinearWithQuantScale, W8A8BFP32OFP32Linear
+from autosmoothquant.thirdparty.baichuan.modeling_baichuan import (
     RMSNorm,
     MLP,
     BaichuanAttention,
@@ -18,8 +16,9 @@ from thirdparty.baichuan.modeling_baichuan import (
     BaichuanForCausalLM,
     NormHead
 )
-from thirdparty.baichuan.configuration_baichuan import BaichuanConfig
+from autosmoothquant.thirdparty.baichuan.configuration_baichuan import BaichuanConfig
 
+logger = logging.get_logger(__name__)
 
 try:
     from xformers import ops as xops
@@ -77,7 +76,7 @@ class Int8BaichuanAttention(nn.Module):
                 f"hidden_size {self.hidden_size} is not divisible by num_heads {self.num_heads}"
             )
         self.W_pack = W8A8BFP32OFP32Linear(self.hidden_size, 3 * self.num_heads * self.head_dim)
-        self.o_proj = W8A8BFP32OFP32LinearWithSFactor(self.num_heads * self.head_dim, self.hidden_size)
+        self.o_proj = W8A8BFP32OFP32LinearWithQuantScale(self.num_heads * self.head_dim, self.hidden_size)
     
     _shape = BaichuanAttention._shape
     
@@ -93,7 +92,7 @@ class Int8BaichuanAttention(nn.Module):
         # we do not impelement attn for now bacuase we want to use paged attention
         int8_module.W_pack = W8A8BFP32OFP32Linear.from_float(
           module.W_pack, attn_input_scale)
-        int8_module.o_proj = W8A8BFP32OFP32LinearWithSFactor.from_float(
+        int8_module.o_proj = W8A8BFP32OFP32LinearWithQuantScale.from_float(
             module.o_proj, out_input_scale)
         return int8_module
 
@@ -185,7 +184,7 @@ class Int8BaichuanMLP(nn.Module):
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
         self.gate_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size)
-        self.down_proj = W8A8BFP32OFP32LinearWithSFactor(self.intermediate_size, self.hidden_size)
+        self.down_proj = W8A8BFP32OFP32LinearWithQuantScale(self.intermediate_size, self.hidden_size)
         self.up_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size)
         self.act_fn = ACT2FN[hidden_act]
     
@@ -217,7 +216,7 @@ class Int8BaichuanMLP(nn.Module):
 
         int8Mlp.gate_proj = gateup_list[0]
         int8Mlp.up_proj = gateup_list[1]
-        int8Mlp.down_proj = W8A8BFP32OFP32LinearWithSFactor.from_float(
+        int8Mlp.down_proj = W8A8BFP32OFP32LinearWithQuantScale.from_float(
             module.down_proj, 
             down_input_scale)
 
