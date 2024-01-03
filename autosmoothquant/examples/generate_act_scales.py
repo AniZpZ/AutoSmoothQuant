@@ -7,7 +7,7 @@ from transformers import (
 )
 import argparse
 
-from quantize.calibration import get_act_scales
+from autosmoothquant.quantize.calibration import get_act_scales
 
 def build_model_and_tokenizer(model_name):
     tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=512)

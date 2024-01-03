@@ -1,1 +1,1 @@
-from .linear import W8A16Linear, W8FakeA8Linear
+from .linear import W8A8BFP32OFP32Linear, W8A8BFP32OFP32QKVLinear, W8A8BFP32OFP32LinearWithQuantScale

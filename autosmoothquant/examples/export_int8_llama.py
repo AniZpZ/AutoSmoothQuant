@@ -12,6 +12,13 @@ from autosmoothquant.models.llama import Int8LlamaForCausalLM
 from autosmoothquant.quantize.smooth import smooth_lm
 from autosmoothquant.quantize.calibration import get_static_llama_decoder_layer_scales
 
+# Configure activation quant map, options: 'per-token' or 'per-tensor'
+act_quant_map = {
+    "qkv_proj": "per-token",
+    "o_proj": "per-token",
+    "gate_up_proj": "per-token",
+    "down_proj": "per-token"
+}
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -43,6 +50,7 @@ if __name__ == '__main__':
                                                                             seq_len=args.seq_len)
     output_path = Path(args.output_path) / (Path(args.model_name).name + "-smoothquant")
 
-    int8_model = Int8LlamaForCausalLM.from_float(model, decoder_layer_scales)
+    int8_model = Int8LlamaForCausalLM.from_float(model, decoder_layer_scales, act_quant_map)
     int8_model.save_pretrained(output_path)
+    tokenizer.save_pretrained(output_path)
     print(f"Saved int8 model at {output_path}")
