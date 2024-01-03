@@ -12,10 +12,10 @@ from transformers.models.opt.modeling_opt import (
     BaseModelOutputWithPast
 )
 from typing import Optional, Tuple, List
-from layers.nn.linear import W8A8BFP32OFP32Linear, W8A8B8O8Linear, W8A8B8O8LinearReLU
+from layers.nn.linear import W8A8BFP32OFP32Linear, W8A8BFP32OFP32LinearWithQuantScale
 from layers.nn.fused import LayerNormQ
 from transformers.utils import logging
-from layers.nn.bmm import BMM_S8T_S8N_S8T, BMM_S8T_S8N_F32T
+
 logger = logging.get_logger(__name__)
 
 
@@ -38,14 +38,9 @@ class Int8OPTAttention(nn.Module):
                 f" and `num_heads`: {num_heads})."
             )
 
-        self.attention_weight_scale = 1.0
-
-        self.qk_bmm = BMM_S8T_S8N_F32T(1.0)
-        self.pv_bmm = BMM_S8T_S8N_S8T(1.0)
-
-        self.k_proj = W8A8B8O8Linear(embed_dim, embed_dim)
-        self.v_proj = W8A8B8O8Linear(embed_dim, embed_dim)
-        self.q_proj = W8A8B8O8Linear(embed_dim, embed_dim)
+        self.k_proj = W8A8BFP32OFP32Linear(embed_dim, embed_dim)
+        self.v_proj = W8A8BFP32OFP32Linear(embed_dim, embed_dim)
+        self.q_proj = W8A8BFP32OFP32Linear(embed_dim, embed_dim)
         self.out_proj = W8A8BFP32OFP32Linear(embed_dim, embed_dim)
 
     @staticmethod
@@ -58,23 +53,19 @@ class Int8OPTAttention(nn.Module):
                    out_input_scale: float):
         int8_module = Int8OPTAttention(module.embed_dim, module.num_heads)
         # Fuse the scaling into the q_proj output scale
-        q_output_scale = q_output_scale * module.scaling
+        # q_output_scale = q_output_scale * module.scaling
         module.q_proj.weight *= module.scaling
         module.q_proj.bias *= module.scaling
-        int8_module.q_proj = W8A8B8O8Linear.from_float(
-            module.q_proj, input_scale, q_output_scale)
-        int8_module.k_proj = W8A8B8O8Linear.from_float(
-            module.k_proj, input_scale, k_output_scale)
-        int8_module.v_proj = W8A8B8O8Linear.from_float(
-            module.v_proj, input_scale, v_output_scale)
+        int8_module.q_proj = W8A8BFP32OFP32Linear.from_float(
+            module.q_proj, input_scale)
+        int8_module.k_proj = W8A8BFP32OFP32Linear.from_float(
+            module.k_proj, input_scale)
+        int8_module.v_proj = W8A8BFP32OFP32Linear.from_float(
+            module.v_proj, input_scale)
         int8_module.out_proj = W8A8BFP32OFP32Linear.from_float(
             module.out_proj, out_input_scale)
-        int8_module.qk_bmm = BMM_S8T_S8N_F32T.from_scale(
-            q_output_scale, k_output_scale)
 
         # alpha = s_prob * s_v / s_out, where s_prob = 1 / 127
-        int8_module.pv_bmm = BMM_S8T_S8N_S8T.from_scale(
-            1.0 / 127, v_output_scale, out_input_scale)
         return int8_module
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
@@ -128,7 +119,7 @@ class Int8OPTAttention(nn.Module):
         value_states = value_states.view(*proj_shape)
 
         src_len = key_states.size(1)
-        attn_weights = self.qk_bmm(query_states, key_states)
+        attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
 
         if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
             raise ValueError(
@@ -174,11 +165,11 @@ class Int8OPTAttention(nn.Module):
             attn_probs_reshaped = None
 
         # (A_row V_row)_row = (A_row V_col ^T)_row
-        attn_probs.mul_(127).round_()
-        attn_probs = attn_probs.to(torch.int8)
+        # attn_probs.mul_(127).round_()
+        # attn_probs = attn_probs.to(torch.int8)
 
         value_states = value_states.transpose(1, 2).contiguous()
-        attn_output = self.pv_bmm(attn_probs, value_states)
+        attn_output = torch.bmm(attn_probs, value_states)
 
         if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
             raise ValueError(
@@ -186,8 +177,7 @@ class Int8OPTAttention(nn.Module):
                 f" {attn_output.size()}"
             )
 
-        attn_output = attn_output.view(
-            bsz, self.num_heads, tgt_len, self.head_dim)
+        attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
         attn_output = attn_output.transpose(1, 2)
 
         # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
@@ -208,11 +198,10 @@ class Int8OPTDecoderLayer(nn.Module):
             num_heads=num_attention_heads
         )
 
-        self.self_attn_layer_norm = LayerNormQ(
-            self.embed_dim)
-        self.fc1 = W8A8B8O8LinearReLU(self.embed_dim, ffn_dim)
-        self.fc2 = W8A8BFP32OFP32Linear(
-            ffn_dim, self.embed_dim)
+        self.activation_fn = ACT2FN["relu"]
+        self.self_attn_layer_norm = LayerNormQ(self.embed_dim)
+        self.fc1 = W8A8BFP32OFP32Linear(self.embed_dim, ffn_dim)
+        self.fc2 = W8A8BFP32OFP32Linear(ffn_dim, self.embed_dim)
         self.final_layer_norm = LayerNormQ(self.embed_dim)
 
     @staticmethod
@@ -235,8 +224,8 @@ class Int8OPTDecoderLayer(nn.Module):
             module.self_attn, attn_input_scale, q_output_scale, k_output_scale, v_output_scale, out_input_scale)
         int8_module.final_layer_norm = LayerNormQ.from_float(
             module.final_layer_norm, fc1_input_scale)
-        int8_module.fc1 = W8A8B8O8LinearReLU.from_float(
-            module.fc1, fc1_input_scale, fc2_input_scale)
+        int8_module.fc1 = W8A8BFP32OFP32Linear.from_float(
+            module.fc1, fc1_input_scale)
         int8_module.fc2 = W8A8BFP32OFP32Linear.from_float(
             module.fc2, fc2_input_scale)
         return int8_module
@@ -283,7 +272,7 @@ class Int8OPTDecoderLayer(nn.Module):
         hidden_states = self.final_layer_norm(residual)
 
         hidden_states = self.fc1(hidden_states)
-
+        hidden_states = self.activation_fn(hidden_states)
         hidden_states = self.fc2(hidden_states)
 
         residual.add_(hidden_states.to(residual.dtype))
