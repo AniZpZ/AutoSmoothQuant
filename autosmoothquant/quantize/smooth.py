@@ -4,10 +4,11 @@ import torch.nn as nn
 from transformers.models.opt.modeling_opt import OPTDecoderLayer
 from transformers.models.bloom.modeling_bloom import BloomBlock
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaAttention, LlamaRMSNorm
+from autosmoothquant.thirdparty.baichuan.modeling_baichuan import RMSNorm, BaichuanLayer, BaichuanAttention
 
 
 @torch.no_grad()
-def smooth_ln_fcs(ln, fcs, act_scales, model_type = "default", alpha=0.5):
+def smooth_ln_fcs(ln, fcs, act_scales, model_type = "transformers", alpha=0.5):
     if not isinstance(fcs, list):
         fcs = [fcs]
     for fc in fcs:
@@ -15,6 +16,8 @@ def smooth_ln_fcs(ln, fcs, act_scales, model_type = "default", alpha=0.5):
         assert ln.weight.numel() == fc.in_features == act_scales.numel()
     if model_type == "llama":
         assert isinstance(ln, LlamaRMSNorm)
+    elif model_type == "baichuan":
+        assert isinstance(ln, RMSNorm)
     else:
         assert isinstance(ln, nn.LayerNorm)
 
@@ -42,43 +45,43 @@ def smooth_lm(model, scales, alpha=0.5):
             qkv = [module.self_attn.q_proj,
                    module.self_attn.k_proj, module.self_attn.v_proj]
             qkv_input_scales = scales[name + '.self_attn.q_proj']
-            smooth_ln_fcs(attn_ln, qkv, qkv_input_scales, alpha)
+            smooth_ln_fcs(attn_ln, qkv, qkv_input_scales, "transformers", alpha)
 
             ffn_ln = module.final_layer_norm
             fc1 = module.fc1
             fc1_input_scales = scales[name + '.fc1']
-            smooth_ln_fcs(ffn_ln, fc1, fc1_input_scales, "default", alpha)
+            smooth_ln_fcs(ffn_ln, fc1, fc1_input_scales, "transformers", alpha)
         elif isinstance(module, BloomBlock):
             attn_ln = module.input_layernorm
             qkv = module.self_attention.query_key_value
             qkv_input_scales = scales[name + '.self_attention.query_key_value']
-            smooth_ln_fcs(attn_ln, qkv, qkv_input_scales, alpha)
+            smooth_ln_fcs(attn_ln, qkv, qkv_input_scales, "transformers", alpha)
 
             ffn_ln = module.post_attention_layernorm
             fc1 = module.mlp.dense_h_to_4h
             fc1_input_scales = scales[name + '.mlp.dense_h_to_4h']
-            smooth_ln_fcs(ffn_ln, fc1, fc1_input_scales, "default", alpha)
+            smooth_ln_fcs(ffn_ln, fc1, fc1_input_scales, "transformers", alpha)
         elif isinstance(module, LlamaDecoderLayer):
             print(f"smooth llama model: {name}")
             attn_ln = module.input_layernorm #attention forward norm
             qkv = [module.self_attn.q_proj,
                    module.self_attn.k_proj, module.self_attn.v_proj]
             qkv_input_scales = scales[name + '.self_attn.q_proj']
-            smooth_ln_fcs_llama(attn_ln, qkv, qkv_input_scales, alpha)
+            smooth_ln_fcs(attn_ln, qkv, qkv_input_scales, "llama", alpha)
 
             ffn_ln = module.post_attention_layernorm #feed forward norm
             fcs = [module.mlp.gate_proj, module.mlp.up_proj]
             fcs_input_scales = scales[name + '.mlp.gate_proj']
-            smooth_ln_fcs_llama(ffn_ln, fcs, fcs_input_scales, "llama", alpha)
+            smooth_ln_fcs(ffn_ln, fcs, fcs_input_scales, "llama", alpha)
         elif isinstance(module, BaichuanLayer):
             print(f"smooth baichuan model: {name}")
             attn_ln = module.input_layernorm
             qkv = module.self_attn.W_pack
             qkv_input_scales = scales[name + '.self_attn.W_pack']
-            smooth_ln_fcs(attn_ln, qkv, qkv_input_scales, alpha)
+            smooth_ln_fcs(attn_ln, qkv, qkv_input_scales, "baichuan", alpha)
 
             ffn_ln = module.post_attention_layernorm #feed forward norm
             fcs = [module.mlp.gate_proj, module.mlp.up_proj]
             fcs_input_scales = scales[name + '.mlp.gate_proj']
-            smooth_ln_fcs_llama(ffn_ln, fcs, fcs_input_scales, "llama", alpha)
+            smooth_ln_fcs(ffn_ln, fcs, fcs_input_scales, "baichuan", alpha)
             
