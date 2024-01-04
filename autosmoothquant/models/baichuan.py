@@ -193,11 +193,7 @@ class Int8BaichuanMLP(nn.Module):
     def from_float(module: MLP,
                    config: BaichuanConfig,
                    gate_input_scale: float,
-                   gate_output_scale: float,
-                   up_input_scale: float,
-                   up_output_scale: float,
-                   down_input_scale: float,
-                   down_output_scale: float):
+                   down_input_scale: float):
         int8Mlp = Int8BaichuanMLP(
             hidden_size=config.hidden_size,
             intermediate_size=config.intermediate_size,
@@ -251,11 +247,7 @@ class Int8BaichuanLayer(nn.Module):
                    attn_output_scale: float,
                    out_input_scale: float,
                    gate_input_scale: float,
-                   up_input_scale: float,
-                   down_input_scale: float,
-                   gate_output_scale: float,
-                   up_output_scale: float,
-                   down_output_scale: float
+                   down_input_scale: float
                    ):
         int8_module = Int8BaichuanLayer(
             config
@@ -273,11 +265,7 @@ class Int8BaichuanLayer(nn.Module):
             module.mlp, 
             config,
             gate_input_scale,
-            gate_output_scale,
-            up_input_scale,
-            up_output_scale,
-            down_input_scale,
-            down_output_scale
+            down_input_scale
         )
         int8_module.input_layernorm = Int8BaichuanRMSNorm.from_float(
             module.input_layernorm,

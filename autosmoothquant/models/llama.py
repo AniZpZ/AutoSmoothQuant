@@ -203,15 +203,11 @@ class Int8LlamaMLP(nn.Module):
                    config: LlamaConfig,
                    act_quant_map: dict[str, str],
                    gate_input_scale: float,
-                   gate_output_scale: float,
-                   up_input_scale: float,
-                   up_output_scale: float,
-                   down_input_scale: float,
-                   down_output_scale: float):
+                   down_input_scale: float):
         int8_module = Int8LlamaMLP(config, act_quant_map)
         # act_quant
         int8_module.gate_proj = W8A8BFP32OFP32Linear.from_float(module.gate_proj, gate_input_scale, act_quant=int8_module.gate_up_quant_type)
-        int8_module.up_proj = W8A8BFP32OFP32Linear.from_float(module.up_proj, up_input_scale, act_quant=int8_module.gate_up_quant_type)
+        int8_module.up_proj = W8A8BFP32OFP32Linear.from_float(module.up_proj, gate_input_scale, act_quant=int8_module.gate_up_quant_type)
         int8_module.down_proj = W8A8BFP32OFP32LinearWithQuantScale.from_float(
             module.down_proj, 
             down_input_scale,
@@ -246,11 +242,7 @@ class Int8LlamaDecoderLayer(nn.Module):
                    v_output_scale: float,
                    out_input_scale: float,
                    gate_input_scale: float,
-                   up_input_scale: float,
-                   down_input_scale: float,
-                   gate_output_scale: float,
-                   up_output_scale: float,
-                   down_output_scale: float
+                   down_input_scale: float
                    ):
         int8_module = Int8LlamaDecoderLayer(
             config,
@@ -273,11 +265,7 @@ class Int8LlamaDecoderLayer(nn.Module):
             config,
             act_quant_map,
             gate_input_scale,
-            gate_output_scale,
-            up_input_scale,
-            up_output_scale,
-            down_input_scale,
-            down_output_scale
+            down_input_scale
         )
         if act_quant_map["qkv_proj"] == "per-tensor":
             int8_module.input_layernorm = Int8LlamaRMSNorm.from_float(

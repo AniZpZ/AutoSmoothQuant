@@ -27,6 +27,13 @@ _CONFIG_REGISTRY = {
     "qwen": QWenConfig,
 }
 
+_MODEL_TYPE = {
+    "LlamaForCausalLM": "llama",
+    "LLaMAForCausalLM": "llama",
+    "BaichuanForCausalLM": "baichuan",
+    "OptForCausalLM": "transformers"
+}
+
 def build_model_and_tokenizer(model_name):
     tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=512)
     kwargs = {"torch_dtype": torch.float16, "device_map": "sequential"}
@@ -81,7 +88,7 @@ def get_model_architecture(config) -> Type[nn.Module]:
     architectures = getattr(config, "architectures", [])
     for arch in architectures:
         if arch in _MODEL_REGISTRY:
-            return _MODEL_REGISTRY[arch]
+            return _MODEL_REGISTRY[arch], _MODEL_TYPE[arch]
     raise ValueError(
         f"Model architectures {architectures} are not supported for now. "
         f"Supported architectures: {list(_MODEL_REGISTRY.keys())}")
@@ -106,17 +113,17 @@ def main():
         act_scales = torch.load(args.act_scales)
         smooth_lm(model, act_scales, 0.5)
         config = get_config(args.model_path)
-        quant_model_class = get_model_architecture(config)
+        quant_model_class, model_type = get_model_architecture(config)
         decoder_layer_scales, _ = get_static_decoder_layer_scales(model,
                                                                   tokenizer,
                                                                   args.dataset_path,
                                                                   num_samples=args.num_samples,
-                                                                  seq_len=args.seq_len)
+                                                                  seq_len=args.seq_len,
+                                                                  model_type)
         output_path = Path(args.output_path) / (Path(args.model_name).name + "-smoothquant")
 
         int8_model = quant_model_class.from_float(model, decoder_layer_scales)
         int8_model.save_pretrained(output_path)
-
 
 if __name__ == '__main__':
     main()

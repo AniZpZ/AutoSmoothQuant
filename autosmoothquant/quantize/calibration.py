@@ -102,6 +102,26 @@ def collect_llama_layer_scales(model, act_dict)
     return decoder_layer_scales
 
 @torch.no_grad()
+def collect_baichuan_layer_scales(model, act_dict)
+    decoder_layer_scales = []
+    for idx in range(model.config.num_hidden_layers):
+        scale_dict = {}
+        scale_dict["attn_input_scale"] = act_dict[
+            f"model.layers.{idx}.self_attn.W_pack"]['input'] / 127
+        scale_dict["q_output_scale"] = act_dict[
+            f"model.layers.{idx}.self_attn.W_pack"]['output'] / 127
+        scale_dict["out_input_scale"] = act_dict[
+            f"model.layers.{idx}.self_attn.o_proj"]['input'] / 127
+        # mlp scales
+        scale_dict["gate_input_scale"] = act_dict[
+            f"model.layers.{idx}.mlp.gate_proj"]['input'] / 127
+        scale_dict["down_input_scale"] = act_dict[
+            f"model.layers.{idx}.mlp.down_proj"]["input"] / 127
+        decoder_layer_scales.append(scale_dict)
+
+    return decoder_layer_scales
+
+@torch.no_grad()
 def get_static_decoder_layer_scales(model,
                                     tokenizer,
                                     dataset_path,
@@ -153,6 +173,8 @@ def get_static_decoder_layer_scales(model,
         decoder_layer_scales = collect_transformer_layer_scales(model, act_dict)
     elif model_type = "llama":
         decoder_layer_scales = collect_llama_layer_scales(model, act_dict)
+    elif model_type = "baichuan"
+        decoder_layer_scales = collect_baichuan_layer_scales(model, act_dict)
     else:
         raise ValueError(f"unsupport model type: {model_type}")
 
