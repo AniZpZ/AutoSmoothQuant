@@ -31,7 +31,7 @@ def smooth_ln_fcs(ln, fcs, act_scales, model_type = "transformers", alpha=0.5):
               ).clamp(min=1e-5).to(device).to(dtype)
 
     ln.weight.div_(scales)
-    if model_type != "llama":
+    if model_type == "transformers":
         ln.bias.div_(scales)
 
     for fc in fcs:

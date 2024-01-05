@@ -3,42 +3,36 @@ import argparse
 import os
 
 from pathlib import Path
+from typing import Optional, Type
+from torch import nn
 
 from transformers import AutoTokenizer
-from transformers.models.llama.modeling_llama import LlamaForCausalLM
-from torch.nn.functional import pad
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 
 from autosmoothquant.models.llama import Int8LlamaForCausalLM
 from autosmoothquant.models.baichuan import Int8BaichuanForCausalLM
+from autosmoothquant.models.opt import Int8OPTForCausalLM
 from autosmoothquant.quantize.smooth import smooth_lm
-from autosmoothquant.quantize.calibration import get_static_decoder_layer_scales
+from autosmoothquant.quantize.calibration import get_act_scales, get_static_decoder_layer_scales
+from autosmoothquant.thirdparty.baichuan.configuration_baichuan import BaichuanConfig
 
 _MODEL_REGISTRY = {
     "LlamaForCausalLM": Int8LlamaForCausalLM,
     "LLaMAForCausalLM": Int8LlamaForCausalLM,
     "BaichuanForCausalLM": Int8BaichuanForCausalLM,
-    "OptForCausalLM": Int8OptForCausalLM
+    "OPTForCausalLM": Int8OPTForCausalLM
 }
 
 _CONFIG_REGISTRY = {
-    "mpt": MptConfig,
-    "baichuan": BaiChuanConfig,
-    "aquila": AquilaConfig,
-    "qwen": QWenConfig,
+    "baichuan": BaichuanConfig,
 }
 
 _MODEL_TYPE = {
     "LlamaForCausalLM": "llama",
     "LLaMAForCausalLM": "llama",
     "BaichuanForCausalLM": "baichuan",
-    "OptForCausalLM": "transformers"
+    "OPTForCausalLM": "transformers"
 }
-
-def build_model_and_tokenizer(model_name):
-    tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=512)
-    kwargs = {"torch_dtype": torch.float16, "device_map": "sequential"}
-    model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
-    return model, tokenizer
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -47,7 +41,7 @@ def parse_args():
     parser.add_argument('--quantize-model', type=bool,
                         default=True, help='whether to quant model or not')    
     parser.add_argument('--generate-scale', type=bool,
-                        default=True, help='whether to generate scale or not')                  
+                        default=False, help='whether to generate scale or not')                  
     parser.add_argument('--dataset-path', type=str, default='dataset/val.jsonl.zst',
                         help='location of the calibration dataset')
     parser.add_argument('--scale-output', type=str, default='scales/llama-13b',
@@ -58,7 +52,6 @@ def parse_args():
     parser.add_argument('--seq-len', type=int, default=512)
     parser.add_argument("--model-output", type=str, default='quantized_model/llama-13b',
                         help='where to save the quantized models, activate when quantizing models')
-
     args = parser.parse_args()
     return args
 
@@ -81,8 +74,14 @@ def get_config(model_path: str,
             raise e
     if config.model_type in _CONFIG_REGISTRY:
         config_class = _CONFIG_REGISTRY[config.model_type]
-        config = config_class.from_pretrained(model, revision=revision)
+        config = config_class.from_pretrained(model_path, revision=revision)
     return config
+
+def build_model_and_tokenizer(model_name, trust_remote_code: bool = True):
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust_remote_code, model_max_length=512)
+    kwargs = {"torch_dtype": torch.float16, "device_map": "sequential"}
+    model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=trust_remote_code, **kwargs)
+    return model, tokenizer
 
 def get_model_architecture(config) -> Type[nn.Module]:
     architectures = getattr(config, "architectures", [])
@@ -106,11 +105,11 @@ def main():
     if args.generate_scale:
         act_scales = get_act_scales(model, tokenizer, args.dataset_path,
                                 args.num_samples, args.seq_len)
-        os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
-        torch.save(act_scales, args.output_path)
+        os.makedirs(os.path.dirname(args.scale_output), exist_ok=True)
+        torch.save(act_scales, args.scale_output)
     
     if args.quantize_model:
-        act_scales = torch.load(args.act_scales)
+        act_scales = torch.load(args.scale_input)
         smooth_lm(model, act_scales, 0.5)
         config = get_config(args.model_path)
         quant_model_class, model_type = get_model_architecture(config)
@@ -119,11 +118,17 @@ def main():
                                                                   args.dataset_path,
                                                                   num_samples=args.num_samples,
                                                                   seq_len=args.seq_len,
-                                                                  model_type)
-        output_path = Path(args.output_path) / (Path(args.model_name).name + "-smoothquant")
-
-        int8_model = quant_model_class.from_float(model, decoder_layer_scales)
+                                                                  model_type=model_type)
+        output_path = Path(args.model_output) / (Path(args.model_path).name + "-smoothquant")
+        quant_config = {
+            "qkv_proj": "per-tensor",
+            "o_proj": "per-token",
+            "gate_up_proj": "per-tensor",
+            "down_proj": "per-token"
+        }
+        int8_model = quant_model_class.from_float(model, decoder_layer_scales, quant_config)
         int8_model.save_pretrained(output_path)
+        tokenizer.save_pretrained(output_path)
 
 if __name__ == '__main__':
     main()

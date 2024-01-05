@@ -54,7 +54,7 @@ def get_act_scales(model, tokenizer, dataset_path, num_samples=512, seq_len=512)
     return act_scales
 
 @torch.no_grad()
-def collect_transformer_layer_scales(model, act_dict):
+def collect_transformers_layer_scales(model, act_dict):
     decoder_layer_scales = []
     for idx in range(model.config.num_hidden_layers):
         scale_dict = {}
@@ -78,7 +78,7 @@ def collect_transformer_layer_scales(model, act_dict):
 
 
 @torch.no_grad()
-def collect_llama_layer_scales(model, act_dict)
+def collect_llama_layer_scales(model, act_dict):
     decoder_layer_scales = []
     for idx in range(model.config.num_hidden_layers):
         scale_dict = {}
@@ -102,13 +102,13 @@ def collect_llama_layer_scales(model, act_dict)
     return decoder_layer_scales
 
 @torch.no_grad()
-def collect_baichuan_layer_scales(model, act_dict)
+def collect_baichuan_layer_scales(model, act_dict):
     decoder_layer_scales = []
     for idx in range(model.config.num_hidden_layers):
         scale_dict = {}
         scale_dict["attn_input_scale"] = act_dict[
             f"model.layers.{idx}.self_attn.W_pack"]['input'] / 127
-        scale_dict["q_output_scale"] = act_dict[
+        scale_dict["attn_output_scale"] = act_dict[
             f"model.layers.{idx}.self_attn.W_pack"]['output'] / 127
         scale_dict["out_input_scale"] = act_dict[
             f"model.layers.{idx}.self_attn.o_proj"]['input'] / 127
@@ -127,7 +127,7 @@ def get_static_decoder_layer_scales(model,
                                     dataset_path,
                                     num_samples=512,
                                     seq_len=512,
-                                    model_type = "transformer"
+                                    model_type = "transformers"
                                     ):
     model.eval()
     device = next(model.parameters()).device
@@ -170,10 +170,10 @@ def get_static_decoder_layer_scales(model,
 
     decoder_layer_scales = []
     if model_type == "transformers":
-        decoder_layer_scales = collect_transformer_layer_scales(model, act_dict)
-    elif model_type = "llama":
+        decoder_layer_scales = collect_transformers_layer_scales(model, act_dict)
+    elif model_type == "llama":
         decoder_layer_scales = collect_llama_layer_scales(model, act_dict)
-    elif model_type = "baichuan"
+    elif model_type == "baichuan":
         decoder_layer_scales = collect_baichuan_layer_scales(model, act_dict)
     else:
         raise ValueError(f"unsupport model type: {model_type}")

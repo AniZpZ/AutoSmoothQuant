@@ -59,7 +59,7 @@ class Int8LlamaAttention(nn.Module):
     def __init__(
         self,
         config: LlamaConfig,
-        act_quant_map: dict[str, str]
+        quant_config: dict[str, str]
     ):
         super().__init__()
         self.config = config
@@ -74,8 +74,8 @@ class Int8LlamaAttention(nn.Module):
                 f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.embed_dim}"
                 f" and `num_heads`: {self.num_heads})."
             )
-        self.qkv_quant_type = act_quant_map["qkv_proj"]
-        self.o_quant_type = act_quant_map["o_proj"]
+        self.qkv_quant_type = quant_config["qkv_proj"]
+        self.o_quant_type = quant_config["o_proj"]
         self.k_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.num_heads * self.head_dim, act_quant=self.qkv_quant_type)
         self.v_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.num_heads * self.head_dim, act_quant=self.qkv_quant_type)
         self.q_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.num_heads * self.head_dim, act_quant=self.qkv_quant_type)
@@ -90,13 +90,13 @@ class Int8LlamaAttention(nn.Module):
     @torch.no_grad()
     def from_float(module: LlamaAttention,
                    config: LlamaConfig,
-                   act_quant_map: dict[str, str],
+                   quant_config: dict[str, str],
                    attn_input_scale: float,
                    q_output_scale: float,
                    k_output_scale: float,
                    v_output_scale: float,
                    out_input_scale: float):
-        int8_module = Int8LlamaAttention(config, act_quant_map)
+        int8_module = Int8LlamaAttention(config, quant_config)
         # we do not impelement attn for now bacuase we want use paged attention
         # act_quant
         int8_module.q_proj = W8A8BFP32OFP32Linear.from_float(module.q_proj, attn_input_scale, act_quant=int8_module.qkv_quant_type)
@@ -181,17 +181,16 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
     return q_embed, k_embed
 
 class Int8LlamaMLP(nn.Module):
-    def __init__(self, config: LlamaConfig, act_quant_map: dict[str, str]):
+    def __init__(self, config: LlamaConfig, quant_config: dict[str, str]):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
         self.down_input_scale = 0.
-        self.gate_up_quant_type = act_quant_map["gate_up_proj"]
-        self.down_quant_type = act_quant_map["down_proj"]
+        self.gate_up_quant_type = quant_config["gate_up_proj"]
+        self.down_quant_type = quant_config["down_proj"]
         # need fp32 out bcause silu
         self.gate_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size, act_quant=self.gate_up_quant_type)
-
         self.up_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size, act_quant=self.gate_up_quant_type)
         self.down_proj = W8A8BFP32OFP32LinearWithQuantScale(self.intermediate_size, self.hidden_size, act_quant=self.down_quant_type)
         # silu_and_mul_kernel in vLLM can be a reference of SwiGLU
@@ -201,10 +200,10 @@ class Int8LlamaMLP(nn.Module):
     @torch.no_grad()
     def from_float(module: LlamaMLP,
                    config: LlamaConfig,
-                   act_quant_map: dict[str, str],
+                   quant_config: dict[str, str],
                    gate_input_scale: float,
                    down_input_scale: float):
-        int8_module = Int8LlamaMLP(config, act_quant_map)
+        int8_module = Int8LlamaMLP(config, quant_config)
         # act_quant
         int8_module.gate_proj = W8A8BFP32OFP32Linear.from_float(module.gate_proj, gate_input_scale, act_quant=int8_module.gate_up_quant_type)
         int8_module.up_proj = W8A8BFP32OFP32Linear.from_float(module.up_proj, gate_input_scale, act_quant=int8_module.gate_up_quant_type)
@@ -221,21 +220,21 @@ class Int8LlamaMLP(nn.Module):
         return self.down_proj(hidden)
 
 class Int8LlamaDecoderLayer(nn.Module):
-    def __init__(self, config: LlamaConfig, act_quant_map: dict[str, str]):
+    def __init__(self, config: LlamaConfig, quant_config: dict[str, str]):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = Int8LlamaAttention(config, act_quant_map)
-        self.mlp = Int8LlamaMLP(config, act_quant_map)
+        self.self_attn = Int8LlamaAttention(config, quant_config)
+        self.mlp = Int8LlamaMLP(config, quant_config)
         #FIXME: use int8 rmsnorm
-        input_layernorm_cls = _RMSNorm[act_quant_map["qkv_proj"]]
-        post_attention_layernorm_cls = _RMSNorm[act_quant_map["gate_up_proj"]]
+        input_layernorm_cls = _RMSNorm[quant_config["qkv_proj"]]
+        post_attention_layernorm_cls = _RMSNorm[quant_config["gate_up_proj"]]
         self.input_layernorm = input_layernorm_cls(self.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = post_attention_layernorm_cls(self.hidden_size, eps=config.rms_norm_eps)
 
     @staticmethod
     def from_float(module: LlamaDecoderLayer,
                    config: LlamaConfig,
-                   act_quant_map: dict[str, str],
+                   quant_config: dict[str, str],
                    attn_input_scale: float,
                    q_output_scale: float,
                    k_output_scale: float,
@@ -246,13 +245,13 @@ class Int8LlamaDecoderLayer(nn.Module):
                    ):
         int8_module = Int8LlamaDecoderLayer(
             config,
-            act_quant_map
+            quant_config
         )
 
         int8_module.self_attn = Int8LlamaAttention.from_float(
             module.self_attn, 
             config,
-            act_quant_map,
+            quant_config,
             attn_input_scale,
             q_output_scale,
             k_output_scale,
@@ -263,18 +262,18 @@ class Int8LlamaDecoderLayer(nn.Module):
         int8_module.mlp = Int8LlamaMLP.from_float(
             module.mlp, 
             config,
-            act_quant_map,
+            quant_config,
             gate_input_scale,
             down_input_scale
         )
-        if act_quant_map["qkv_proj"] == "per-tensor":
+        if quant_config["qkv_proj"] == "per-tensor":
             int8_module.input_layernorm = Int8LlamaRMSNorm.from_float(
                 module.input_layernorm,
                 attn_input_scale
             )
         else:
             int8_module.input_layernorm = module.input_layernorm
-        if act_quant_map["gate_up_proj"] == "per-tensor":
+        if quant_config["gate_up_proj"] == "per-tensor":
             int8_module.post_attention_layernorm = Int8LlamaRMSNorm.from_float(
                 module.post_attention_layernorm,
                 gate_input_scale
@@ -320,13 +319,13 @@ class Int8LlamaDecoderLayer(nn.Module):
         return outputs
 
 class Int8LlamaModel(LlamaPreTrainedModel):
-    def __init__(self, config: LlamaConfig, act_quant_map: dict[str, str]):
+    def __init__(self, config: LlamaConfig, quant_config: dict[str, str]):
         super().__init__(config)
         self.config = config
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.layers = nn.ModuleList([Int8LlamaDecoderLayer(config, act_quant_map) for _ in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([Int8LlamaDecoderLayer(config, quant_config) for _ in range(config.num_hidden_layers)])
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
@@ -339,33 +338,33 @@ class Int8LlamaModel(LlamaPreTrainedModel):
     forward = LlamaModel.forward
     
     @staticmethod
-    def from_float(module, decoder_layer_scales, act_quant_map):
-        int8_module = Int8LlamaModel(module.config, act_quant_map)
+    def from_float(module, decoder_layer_scales, quant_config):
+        int8_module = Int8LlamaModel(module.config, quant_config)
         
         int8_module.embed_tokens = module.embed_tokens
         int8_module.norm = module.norm
         
         for i, layer in enumerate(module.layers):
             int8_module.layers[i] = Int8LlamaDecoderLayer.from_float(
-                layer, module.config, act_quant_map, **decoder_layer_scales[i])
+                layer, module.config, quant_config, **decoder_layer_scales[i])
         return int8_module
 
 class Int8LlamaForCausalLM(LlamaPreTrainedModel):
-    def __init__(self, config, act_quant_map):
+    def __init__(self, config, quant_config):
         super().__init__(config)
         self.config = config
-        self.model = Int8LlamaModel(config, act_quant_map)
+        self.model = Int8LlamaModel(config, quant_config)
         # no need to quant
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         # Initialize weights and apply final processing
         self.post_init()
     
     @staticmethod
-    def from_float(module, decoder_layer_scales, act_quant_map):
-        int8_module = Int8LlamaForCausalLM(module.config, act_quant_map)
+    def from_float(module, decoder_layer_scales, quant_config):
+        int8_module = Int8LlamaForCausalLM(module.config, quant_config)
         print("start trans into int8, this might take a while")
         int8_module.model = Int8LlamaModel.from_float(
-            module.model, decoder_layer_scales, act_quant_map)
+            module.model, decoder_layer_scales, quant_config)
         int8_module.lm_head = module.lm_head
         return int8_module
     

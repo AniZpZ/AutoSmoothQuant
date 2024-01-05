@@ -12,8 +12,8 @@ from transformers.models.opt.modeling_opt import (
     BaseModelOutputWithPast
 )
 from typing import Optional, Tuple, List
-from layers.nn.linear import W8A8BFP32OFP32Linear, W8A8BFP32OFP32LinearWithQuantScale
-from layers.nn.fused import LayerNormQ
+from autosmoothquant.layers.nn.linear import W8A8BFP32OFP32Linear, W8A8BFP32OFP32LinearWithQuantScale
+from autosmoothquant.layers.nn.fused import LayerNormQ
 from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
