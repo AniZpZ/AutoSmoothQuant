@@ -17,12 +17,29 @@ pip install -e .
 
 ## Usage
 ### quantize model
+generate scales and do model quantization with one command:
 ```
-cd smoothquant/examples
-python3 export_int8_model.py 
+cd autosmoothquant/examples
+python3 smoothquant_model.py --model-path=/path/to/model --quantize-model=True --generate-scale=True --dataset-path=/path/to/dataset
+```
+
+use following command for more information 
+```
+python smoothquant_model.py -help 
 ```
 ### inference
-TBA
+- inference with vLLM 
+  
+  Comming soon (this [PR](https://github.com/vllm-project/vllm/pull/1508) could be reference)
+
+- inference in this repo
+```
+cd autosmoothquant/examples
+python3 test_model.py --model-path=/path/to/model --tokenizer-path=/path/to/tokenizer --model-class=llama --prompt="something to say"
+```
+
+### benchmark
+  Comming soon  (this [PR](https://github.com/vllm-project/vllm/pull/1508) could be reference)
 
 ## Supported models
 Model support list:
@@ -33,8 +50,8 @@ Model support list:
 | LLaMA    | 7B/13B/30B/65B              |
 | Mistral  | Soon                        |
 | OPT      | 6.7B/13B/30B |
-| Baichuan-2 | 13B                       |
-| Baichuan | 13B                         |
+| Baichuan-2 | 13B (7B Soon)             |
+| Baichuan | 13B (7B Soon)               |
 
 ## Reference
 If you find SmoothQuant useful or relevant to your research, please cite their paper:

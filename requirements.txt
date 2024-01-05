@@ -1,4 +1,4 @@
-transformers
+transformers == 4.34.0
 datasets
 accelerate
 icecream
