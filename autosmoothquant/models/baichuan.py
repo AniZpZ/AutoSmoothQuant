@@ -5,7 +5,7 @@ from transformers.activations import ACT2FN
 from transformers.utils import logging
 from typing import Optional, Tuple, List
 
-from autosmoothquant.layers.nn.linear import W8A8BFP32OFP32LinearWithQuantScale, W8A8BFP32OFP32Linear
+from autosmoothquant.layers.nn.linear import W8A8BFP32OFP32LinearWithQuantScale, W8A8BFP32OFP32Linear, W8A8BFP32OFP32QKVLinear
 from autosmoothquant.thirdparty.baichuan.modeling_baichuan import (
     RMSNorm,
     MLP,
@@ -56,13 +56,18 @@ class Int8BaichuanRMSNorm(nn.Module):
 
         return int8_norm
 
+_RMSNorm = {
+    "per-tensor": Int8BaichuanRMSNorm,
+    "per-token": RMSNorm
+}
 
 # attention is the same as opt
 class Int8BaichuanAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
     def __init__(
         self,
-        config: BaichuanConfig
+        config: BaichuanConfig,
+        quant_config: dict[str, str]
     ):
         super().__init__()
         self.config = config
@@ -75,8 +80,11 @@ class Int8BaichuanAttention(nn.Module):
             raise ValueError(
                 f"hidden_size {self.hidden_size} is not divisible by num_heads {self.num_heads}"
             )
-        self.W_pack = W8A8BFP32OFP32Linear(self.hidden_size, 3 * self.num_heads * self.head_dim)
-        self.o_proj = W8A8BFP32OFP32LinearWithQuantScale(self.num_heads * self.head_dim, self.hidden_size)
+        self.qkv_quant_type = quant_config["qkv_proj"]
+        self.o_quant_type = quant_config["o_proj"]
+        self.qkv_size = [self.num_heads * self.head_dim] * 3
+        self.W_pack = W8A8BFP32OFP32QKVLinear(self.qkv_size, self.hidden_size, 3 * self.num_heads * self.head_dim, act_quant=self.qkv_quant_type)
+        self.o_proj = W8A8BFP32OFP32LinearWithQuantScale(self.num_heads * self.head_dim, self.hidden_size, act_quant=self.o_quant_type)
     
     _shape = BaichuanAttention._shape
     
@@ -84,16 +92,16 @@ class Int8BaichuanAttention(nn.Module):
     @torch.no_grad()
     def from_float(module: BaichuanAttention,
                    config: BaichuanConfig,
+                   quant_config: dict[str, str],
                    attn_input_scale: float,
                    attn_output_scale: float,
                    out_input_scale: float):
-        int8_module = Int8BaichuanAttention(config)
-        
+        int8_module = Int8BaichuanAttention(config, quant_config)
         # we do not impelement attn for now bacuase we want to use paged attention
-        int8_module.W_pack = W8A8BFP32OFP32Linear.from_float(
-          module.W_pack, attn_input_scale)
+        int8_module.W_pack = W8A8BFP32OFP32QKVLinear.from_float(
+          module.W_pack, attn_input_scale, int8_module.qkv_size, act_quant=int8_module.qkv_quant_type)
         int8_module.o_proj = W8A8BFP32OFP32LinearWithQuantScale.from_float(
-            module.o_proj, out_input_scale)
+            module.o_proj, out_input_scale, act_quant=int8_module.o_quant_type)
         return int8_module
 
     @torch.no_grad()
@@ -179,44 +187,38 @@ class Int8BaichuanMLP(nn.Module):
         hidden_size: int,
         intermediate_size: int,
         hidden_act: str,
+        quant_config: dict[str, str]
     ):
         super().__init__()
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
-        self.gate_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size)
-        self.down_proj = W8A8BFP32OFP32LinearWithQuantScale(self.intermediate_size, self.hidden_size)
-        self.up_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size)
+        self.gate_up_quant_type = quant_config["gate_up_proj"]
+        self.down_quant_type = quant_config["down_proj"]
+        self.gate_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size, act_quant=self.gate_up_quant_type)
+        self.down_proj = W8A8BFP32OFP32LinearWithQuantScale(self.intermediate_size, self.hidden_size, act_quant=self.down_quant_type)
+        self.up_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size, act_quant=self.gate_up_quant_type)
         self.act_fn = ACT2FN[hidden_act]
     
     @staticmethod
     @torch.no_grad()
     def from_float(module: MLP,
                    config: BaichuanConfig,
+                   quant_config: dict[str, str],
                    gate_input_scale: float,
                    down_input_scale: float):
-        int8Mlp = Int8BaichuanMLP(
+        int8_module = Int8BaichuanMLP(
             hidden_size=config.hidden_size,
             intermediate_size=config.intermediate_size,
             hidden_act=config.hidden_act,
+            quant_config=quant_config
         )
-
-        # FIXME: Fuse the scaling into the q_proj output scale
-        linearList = [module.gate_proj, module.up_proj]
-        gateup_list = W8A8BFP32OFP32Linear.from_float_fuse(
-            linearList, 
-            gate_input_scale)
-
-        if len(gateup_list) != 2:
-            raise ValueError(
-                f"invalid qkv gateup len, must return 2 linears but get {len(qkv_list)}")
-
-        int8Mlp.gate_proj = gateup_list[0]
-        int8Mlp.up_proj = gateup_list[1]
-        int8Mlp.down_proj = W8A8BFP32OFP32LinearWithQuantScale.from_float(
+        int8_module.gate_proj = W8A8BFP32OFP32Linear.from_float(module.gate_proj, gate_input_scale, act_quant=int8_module.gate_up_quant_type)
+        int8_module.up_proj = W8A8BFP32OFP32Linear.from_float(module.up_proj, gate_input_scale, act_quant=int8_module.gate_up_quant_type)
+        int8_module.down_proj = W8A8BFP32OFP32LinearWithQuantScale.from_float(
             module.down_proj, 
-            down_input_scale)
-
-        return int8Mlp
+            down_input_scale,
+            act_quant=int8_module.down_quant_type)
+        return int8_module
         
     def forward(self, x):
         # TODO: supprot self.config.pretraining_tp > 1 condition, adapt from transformer.modeling_llama
@@ -226,23 +228,27 @@ class Int8BaichuanMLP(nn.Module):
 
 
 class Int8BaichuanLayer(nn.Module):
-    def __init__(self, config: BaichuanConfig):
+    def __init__(self, config: BaichuanConfig, quant_config: dict[str, str]):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = Int8BaichuanAttention(config=config)
+        self.self_attn = Int8BaichuanAttention(config=config, quant_config=quant_config)
         self.mlp = Int8BaichuanMLP(
             hidden_size=self.hidden_size,
             intermediate_size=config.intermediate_size,
             hidden_act=config.hidden_act,
+            quant_config=quant_config
         )
-        self.input_layernorm = Int8BaichuanRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = Int8BaichuanRMSNorm(
+        input_layernorm_cls = _RMSNorm[quant_config["qkv_proj"]]
+        post_attention_layernorm_cls = _RMSNorm[quant_config["gate_up_proj"]]
+        self.input_layernorm = input_layernorm_cls(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = post_attention_layernorm_cls(
             config.hidden_size, eps=config.rms_norm_eps
         )
     
     @staticmethod
     def from_float(module: BaichuanLayer,
                    config: BaichuanConfig,
+                   quant_config: dict[str, str],
                    attn_input_scale: float,
                    attn_output_scale: float,
                    out_input_scale: float,
@@ -250,12 +256,14 @@ class Int8BaichuanLayer(nn.Module):
                    down_input_scale: float
                    ):
         int8_module = Int8BaichuanLayer(
-            config
+            config,
+            quant_config
         )
 
         int8_module.self_attn = Int8BaichuanAttention.from_float(
             module.self_attn, 
             config,
+            quant_config,
             attn_input_scale,
             attn_output_scale,
             out_input_scale
@@ -264,17 +272,24 @@ class Int8BaichuanLayer(nn.Module):
         int8_module.mlp = Int8BaichuanMLP.from_float(
             module.mlp, 
             config,
+            quant_config,
             gate_input_scale,
             down_input_scale
         )
-        int8_module.input_layernorm = Int8BaichuanRMSNorm.from_float(
-            module.input_layernorm,
-            attn_input_scale
-        )
-        int8_module.post_attention_layernorm = Int8BaichuanRMSNorm.from_float(
-            module.post_attention_layernorm,
-            gate_input_scale
-        )
+        if quant_config["qkv_proj"] == "per-tensor":
+            int8_module.input_layernorm = Int8BaichuanRMSNorm.from_float(
+                module.input_layernorm,
+                attn_input_scale
+            )
+        else:
+            int8_module.input_layernorm = module.input_layernorm
+        if quant_config["gate_up_proj"] == "per-tensor":
+            int8_module.post_attention_layernorm = Int8BaichuanRMSNorm.from_float(
+                module.post_attention_layernorm,
+                gate_input_scale
+            )
+        else:
+            int8_module.post_attention_layernorm = module.post_attention_layernorm
         return int8_module
     
     def forward(
@@ -312,7 +327,7 @@ class Int8BaichuanLayer(nn.Module):
         return outputs
 
 class Int8BaichuanModel(BaichuanPreTrainedModel):
-    def __init__(self, config: BaichuanConfig):
+    def __init__(self, config: BaichuanConfig, quant_config: dict[str, str]):
         super().__init__(config)
         self.config = config
         self.padding_idx = config.pad_token_id
@@ -322,26 +337,26 @@ class Int8BaichuanModel(BaichuanPreTrainedModel):
             config.vocab_size, config.hidden_size, self.padding_idx
         )
         self.layers = torch.nn.ModuleList(
-            [BaichuanLayer(config) for _ in range(config.num_hidden_layers)]
+            [Int8BaichuanLayer(config, quant_config) for _ in range(config.num_hidden_layers)]
         )
         self.norm = RMSNorm(config.hidden_size, epsilon=config.rms_norm_eps)
 
-        self.gradient_checkpointing = config.gradient_checkpointing
+        self.gradient_checkpointing = False
         self.post_init()
         self.max_cache_pos = config.model_max_length
         self.first_run = True
         self.alibi_mask = None
     
     @staticmethod
-    def from_float(module, decoder_layer_scales):
-        int8_module = Int8BaichuanModel(module.config)
+    def from_float(module, decoder_layer_scales, quant_config):
+        int8_module = Int8BaichuanModel(module.config, quant_config)
         
         int8_module.embed_tokens = module.embed_tokens
         int8_module.norm = module.norm
         
         for i, layer in enumerate(module.layers):
             int8_module.layers[i] = Int8BaichuanLayer.from_float(
-                layer, module.config, **decoder_layer_scales[i])
+                layer, module.config, quant_config, **decoder_layer_scales[i])
         return int8_module
     
     get_input_embeddings = BaichuanModel.get_input_embeddings
@@ -350,9 +365,9 @@ class Int8BaichuanModel(BaichuanPreTrainedModel):
     forward = BaichuanModel.forward
 
 class Int8BaichuanForCausalLM(BaichuanPreTrainedModel):
-    def __init__(self, config, *model_args, **model_kwargs):
+    def __init__(self, config, quant_config, *model_args, **model_kwargs):
         super().__init__(config, *model_args, **model_kwargs)
-        self.model = BaichuanModel(config)
+        self.model = Int8BaichuanModel(config, quant_config)
         self.lm_head = NormHead(config.hidden_size, config.vocab_size, bias=False)
         #if hasattr(config, "quantization_config") and config.quantization_config['load_in_4bit']:
         if hasattr(config, "quantization_config") and isinstance(config.quantization_config, dict) and config.quantization_config.get('load_in_4bit', False):
@@ -365,10 +380,19 @@ class Int8BaichuanForCausalLM(BaichuanPreTrainedModel):
         self.post_init()
     
     @staticmethod
-    def from_float(module, decoder_layer_scales):
-        int8_module = Int8BaichuanForCausalLM(module.config)
+    def from_float(module, decoder_layer_scales, quant_config):
+        int8_module = Int8BaichuanForCausalLM(module.config, quant_config)
         print("start trans into int8, this might take a while")
         int8_module.model = Int8BaichuanModel.from_float(
-            module.model, decoder_layer_scales)
+            module.model, decoder_layer_scales, quant_config)
         int8_module.lm_head = module.lm_head
         return int8_module
+    
+    get_input_embeddings =  BaichuanForCausalLM.get_input_embeddings
+    set_input_embeddings =  BaichuanForCausalLM.set_input_embeddings
+    get_output_embeddings =  BaichuanForCausalLM.get_output_embeddings
+    set_output_embeddings =  BaichuanForCausalLM.set_output_embeddings
+    set_decoder =  BaichuanForCausalLM.set_decoder
+    get_decoder =  BaichuanForCausalLM.get_decoder
+    forward =  BaichuanForCausalLM.forward
+    prepare_inputs_for_generation =  BaichuanForCausalLM.prepare_inputs_for_generation

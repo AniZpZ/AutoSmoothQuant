@@ -120,7 +120,8 @@ class W8A8BFP32OFP32Linear(torch.nn.Module):
 
 class W8A8BFP32OFP32QKVLinear(W8A8BFP32OFP32Linear):
     # for fused qkv weight
-    def __init__(self, *args, **kwargs):
+    def __init__(self, qkv_size, *args, **kwargs):
+        self.qkv_size = qkv_size
         super().__init__(*args, **kwargs)
         self._buffers.pop("dequant_scale")
         self.register_buffer(
@@ -158,7 +159,7 @@ class W8A8BFP32OFP32QKVLinear(W8A8BFP32OFP32Linear):
         return self
 
     @torch.no_grad()
-    def forward(self, x, qkv_size):
+    def forward(self, x):
         x_shape = x.shape
         x = x.view(-1, x_shape[-1])
         if self.act_quant == "per-token":
@@ -180,12 +181,12 @@ class W8A8BFP32OFP32QKVLinear(W8A8BFP32OFP32Linear):
             device=torch.cuda.current_device(),
         )
         self.i8cugemm.linear_a8_w8_o32_(x, self.weight, out)
-        q, k, v = out.split(qkv_size, dim=-1)
+        q, k, v = out.split(self.qkv_size, dim=-1)
         q_dq = q_dequant_scale * q
         k_dq = k_dequant_scale * k
         v_dq = v_dequant_scale * v
         if self.use_bias:
-            q_bias, k_bias, v_bias = self.bias.split(qkv_size, dim=-1)
+            q_bias, k_bias, v_bias = self.bias.split(self.qkv_size, dim=-1)
             q_dq += q_bias
             k_dq += k_bias
             v_dq += v_bias
@@ -207,7 +208,7 @@ class W8A8BFP32OFP32QKVLinear(W8A8BFP32OFP32Linear):
         ], '"act_quant must be "per-token" or "per-tensor"'
         use_bias = False if module.bias is None else True
         int8_module = W8A8BFP32OFP32QKVLinear(
-            module.in_features, module.out_features, use_bias, act_quant
+            qkv_size, module.in_features, module.out_features, use_bias, act_quant
         )
         q_weight, k_weight, v_weight = module.weight.data.split(qkv_size, dim=0)
         q_int8_weight, q_weight_scale = quantize_per_tensor_absmax(q_weight)
