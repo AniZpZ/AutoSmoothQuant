@@ -17,7 +17,31 @@ pip install -e .
 
 ## Usage
 ### quantize model
-generate scales and do model quantization with one command:
+First add a config file named "quant_config.json" to model path.
+For Baichuan or Llama model, config should be like:
+
+```json
+{
+  "qkv_proj": "per-tensor",
+  "o_proj": "per-tensor",
+  "gate_up_proj": "per-tensor",
+  "down_proj": "per-tensor"
+}
+```
+
+As for Opt model, config should be like:
+
+```json
+{
+  "qkv_proj": "per-tensor",
+  "o_proj": "per-tensor",
+  "fc1": "per-tensor",
+  "fc2": "per-tensor"
+}
+```
+You can set the value to "per-tensor" or "per-token" to perform the quant granularity you want.
+
+Once config is set, generate scales and do model quantization with following command:
 ```
 cd autosmoothquant/examples
 python3 smoothquant_model.py --model-path=/path/to/model --quantize-model=True --generate-scale=True --dataset-path=/path/to/dataset

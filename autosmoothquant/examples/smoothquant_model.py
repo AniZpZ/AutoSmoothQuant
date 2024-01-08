@@ -77,6 +77,12 @@ def get_config(model_path: str,
         config = config_class.from_pretrained(model_path, revision=revision)
     return config
 
+def parse_quant_config(config_path):
+  data = {}
+  with open(config_path, 'r', encoding='utf-8') as file:
+    data = json.load(file)
+  return data
+
 def build_model_and_tokenizer(model_name, trust_remote_code: bool = True):
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust_remote_code, model_max_length=512)
     kwargs = {"torch_dtype": torch.float16, "device_map": "sequential"}
@@ -120,13 +126,11 @@ def main():
                                                                   seq_len=args.seq_len,
                                                                   model_type=model_type)
         output_path = Path(args.model_output) / (Path(args.model_path).name + "-smoothquant")
-        quant_config = {
-            "qkv_proj": "per-tensor",
-            "o_proj": "per-token",
-            "gate_up_proj": "per-tensor",
-            "down_proj": "per-token"
-        }
+
+        config_path = os.path.join(args.model_path, "quant_config.json")
+        quant_config = parse_quant_config(config_path)
         int8_model = quant_model_class.from_float(model, decoder_layer_scales, quant_config)
+        
         int8_model.save_pretrained(output_path)
         tokenizer.save_pretrained(output_path)
 
