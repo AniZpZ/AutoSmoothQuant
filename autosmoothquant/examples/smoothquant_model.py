@@ -41,7 +41,7 @@ def parse_args():
     parser.add_argument('--quantize-model', type=bool,
                         default=True, help='whether to quant model or not')    
     parser.add_argument('--generate-scale', type=bool,
-                        default=False, help='whether to generate scale or not')                  
+                        default=True, help='whether to generate scale or not')                  
     parser.add_argument('--dataset-path', type=str, default='dataset/val.jsonl.zst',
                         help='location of the calibration dataset')
     parser.add_argument('--scale-output', type=str, default='scales/llama-13b',
