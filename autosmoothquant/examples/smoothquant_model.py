@@ -1,6 +1,7 @@
 import torch
 import argparse
 import os
+import json
 
 from pathlib import Path
 from typing import Optional, Type
@@ -132,7 +133,6 @@ def main():
         int8_model = quant_model_class.from_float(model, decoder_layer_scales, quant_config)
         
         int8_model.save_pretrained(output_path)
-        tokenizer.save_pretrained(output_path)
 
 if __name__ == '__main__':
     main()

@@ -1,17 +1,13 @@
 import os
 import torch
+import argparse
+import json
+
 from autosmoothquant.models.llama import Int8LlamaForCausalLM
 from autosmoothquant.models.baichuan import Int8BaichuanForCausalLM
 from autosmoothquant.models.opt import Int8OPTForCausalLM
 from transformers import AutoConfig, AutoTokenizer, LlamaForCausalLM
-from autosmoothquant.thirdparty.baichuan.modeling_baichuan import BaichuanForCausalLM
 
-# quant_config = {
-#            "qkv_proj": "per-tensor",
-#            "o_proj": "per-tensor",
-#            "gate_up_proj": "per-tensor",
-#            "down_proj": "per-tensor"
-#        }
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -38,15 +34,16 @@ def main():
     config_path = os.path.join(args.model_path, "quant_config.json")
     quant_config = parse_quant_config(config_path)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path, trust_remote_code=True)
+    tokenizer.pad_token = tokenizer.eos_token
     if args.model_class == "llama":
-      model = LlamaForCausalLM.from_pretrained(args.model_path, quant_config, device_map="auto", torch_dtype="auto")
+      model = Int8LlamaForCausalLM.from_pretrained(args.model_path, quant_config, device_map="auto")
     elif args.model_class == "baichuan":
-      model = Int8BaichuanForCausalLM.from_pretrained(args.model_path, quant_config, device_map="auto", torch_dtype="auto")
+      model = Int8BaichuanForCausalLM.from_pretrained(args.model_path, quant_config, device_map="auto")
     elif args.model_class == "opt":
-      model = Int8BaichuanForCausalLM.from_pretrained(args. model_path, quant_config, device_map="auto", torch_dtype="auto")
+      model = Int8OPTForCausalLM.from_pretrained(args. model_path, quant_config, device_map="auto")
     else:
       raise ValueError(
-        f"Model type {args.model_class} are not supported for now. ")
+        f"Model type {args.model_class} are not supported for now.")
 
     inputs = tokenizer(
       args.prompt,
