@@ -1,6 +1,7 @@
 import torch
 import argparse
 import os
+import json
 
 from pathlib import Path
 from typing import Optional, Type
@@ -41,7 +42,7 @@ def parse_args():
     parser.add_argument('--quantize-model', type=bool,
                         default=True, help='whether to quant model or not')    
     parser.add_argument('--generate-scale', type=bool,
-                        default=False, help='whether to generate scale or not')                  
+                        default=True, help='whether to generate scale or not')                  
     parser.add_argument('--dataset-path', type=str, default='dataset/val.jsonl.zst',
                         help='location of the calibration dataset')
     parser.add_argument('--scale-output', type=str, default='scales/llama-13b',
@@ -76,6 +77,12 @@ def get_config(model_path: str,
         config_class = _CONFIG_REGISTRY[config.model_type]
         config = config_class.from_pretrained(model_path, revision=revision)
     return config
+
+def parse_quant_config(config_path):
+  data = {}
+  with open(config_path, 'r', encoding='utf-8') as file:
+    data = json.load(file)
+  return data
 
 def build_model_and_tokenizer(model_name, trust_remote_code: bool = True):
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust_remote_code, model_max_length=512)
@@ -120,15 +127,12 @@ def main():
                                                                   seq_len=args.seq_len,
                                                                   model_type=model_type)
         output_path = Path(args.model_output) / (Path(args.model_path).name + "-smoothquant")
-        quant_config = {
-            "qkv_proj": "per-tensor",
-            "o_proj": "per-token",
-            "gate_up_proj": "per-tensor",
-            "down_proj": "per-token"
-        }
+
+        config_path = os.path.join(args.model_path, "quant_config.json")
+        quant_config = parse_quant_config(config_path)
         int8_model = quant_model_class.from_float(model, decoder_layer_scales, quant_config)
+        
         int8_model.save_pretrained(output_path)
-        tokenizer.save_pretrained(output_path)
 
 if __name__ == '__main__':
     main()

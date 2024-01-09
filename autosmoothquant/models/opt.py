@@ -15,9 +15,14 @@ from typing import Optional, Tuple, List
 from autosmoothquant.layers.nn.linear import W8A8BFP32OFP32Linear, W8A8BFP32OFP32LinearWithQuantScale
 from autosmoothquant.layers.nn.fused import LayerNormQ
 from transformers.utils import logging
+from transformers.activations import ACT2FN
 
 logger = logging.get_logger(__name__)
 
+_LayerNorm = {
+    "per-tensor": LayerNormQ,
+    "per-token": nn.LayerNorm
+}
 
 class Int8OPTAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -26,6 +31,7 @@ class Int8OPTAttention(nn.Module):
         self,
         embed_dim: int,
         num_heads: int,
+        quant_config: dict[str, str]
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -37,35 +43,33 @@ class Int8OPTAttention(nn.Module):
                 f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.embed_dim}"
                 f" and `num_heads`: {num_heads})."
             )
-
-        self.k_proj = W8A8BFP32OFP32Linear(embed_dim, embed_dim)
-        self.v_proj = W8A8BFP32OFP32Linear(embed_dim, embed_dim)
-        self.q_proj = W8A8BFP32OFP32Linear(embed_dim, embed_dim)
-        self.out_proj = W8A8BFP32OFP32Linear(embed_dim, embed_dim)
+        self.qkv_quant_type = quant_config["qkv_proj"]
+        self.o_quant_type = quant_config["o_proj"]
+        self.k_proj = W8A8BFP32OFP32Linear(embed_dim, embed_dim, act_quant=self.qkv_quant_type)
+        self.v_proj = W8A8BFP32OFP32Linear(embed_dim, embed_dim, act_quant=self.qkv_quant_type)
+        self.q_proj = W8A8BFP32OFP32Linear(embed_dim, embed_dim, act_quant=self.qkv_quant_type)
+        self.out_proj = W8A8BFP32OFP32Linear(embed_dim, embed_dim, act_quant=self.o_quant_type)
 
     @staticmethod
     @torch.no_grad()
     def from_float(module: OPTAttention,
+                   quant_config: dict[str, str],
                    input_scale: float,
                    q_output_scale: float,
                    k_output_scale: float,
                    v_output_scale: float,
                    out_input_scale: float):
-        int8_module = Int8OPTAttention(module.embed_dim, module.num_heads)
-        # Fuse the scaling into the q_proj output scale
-        # q_output_scale = q_output_scale * module.scaling
+        int8_module = Int8OPTAttention(module.embed_dim, module.num_heads, quant_config)
         module.q_proj.weight *= module.scaling
         module.q_proj.bias *= module.scaling
         int8_module.q_proj = W8A8BFP32OFP32Linear.from_float(
-            module.q_proj, input_scale)
+            module.q_proj, input_scale, act_quant=int8_module.qkv_quant_type)
         int8_module.k_proj = W8A8BFP32OFP32Linear.from_float(
-            module.k_proj, input_scale)
+            module.k_proj, input_scale, act_quant=int8_module.qkv_quant_type)
         int8_module.v_proj = W8A8BFP32OFP32Linear.from_float(
-            module.v_proj, input_scale)
+            module.v_proj, input_scale, act_quant=int8_module.qkv_quant_type)
         int8_module.out_proj = W8A8BFP32OFP32Linear.from_float(
-            module.out_proj, out_input_scale)
-
-        # alpha = s_prob * s_v / s_out, where s_prob = 1 / 127
+            module.out_proj, out_input_scale, act_quant=int8_module.o_quant_type)
         return int8_module
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
@@ -164,11 +168,6 @@ class Int8OPTAttention(nn.Module):
         else:
             attn_probs_reshaped = None
 
-        # (A_row V_row)_row = (A_row V_col ^T)_row
-        # attn_probs.mul_(127).round_()
-        # attn_probs = attn_probs.to(torch.int8)
-
-        value_states = value_states.transpose(1, 2).contiguous()
         attn_output = torch.bmm(attn_probs, value_states)
 
         if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
@@ -190,22 +189,27 @@ class Int8OPTAttention(nn.Module):
 
 
 class Int8OPTDecoderLayer(nn.Module):
-    def __init__(self, embed_dim, num_attention_heads, ffn_dim):
+    def __init__(self, embed_dim, num_attention_heads, ffn_dim, quant_config):
         super().__init__()
         self.embed_dim = embed_dim
         self.self_attn = Int8OPTAttention(
             embed_dim=self.embed_dim,
-            num_heads=num_attention_heads
+            num_heads=num_attention_heads,
+            quant_config=quant_config
         )
-
+        self.fc1_quant_type = quant_config["fc1"]
+        self.fc2_quant_type = quant_config["fc2"]
         self.activation_fn = ACT2FN["relu"]
-        self.self_attn_layer_norm = LayerNormQ(self.embed_dim)
-        self.fc1 = W8A8BFP32OFP32Linear(self.embed_dim, ffn_dim)
-        self.fc2 = W8A8BFP32OFP32Linear(ffn_dim, self.embed_dim)
-        self.final_layer_norm = LayerNormQ(self.embed_dim)
+        self.fc1 = W8A8BFP32OFP32Linear(self.embed_dim, ffn_dim, act_quant=self.fc1_quant_type)
+        self.fc2 = W8A8BFP32OFP32Linear(ffn_dim, self.embed_dim, act_quant=self.fc2_quant_type)
+        self_attn_layer_norm_cls = _LayerNorm[quant_config["qkv_proj"]]
+        final_layer_norm_cls = _LayerNorm[quant_config["fc1"]]
+        self.self_attn_layer_norm = self_attn_layer_norm_cls(self.embed_dim)
+        self.final_layer_norm = final_layer_norm_cls(self.embed_dim)
 
     @staticmethod
     def from_float(module: OPTDecoderLayer,
+                   quant_config: dict[str, str],
                    attn_input_scale: float,
                    q_output_scale: float,
                    k_output_scale: float,
@@ -216,18 +220,25 @@ class Int8OPTDecoderLayer(nn.Module):
         int8_module = Int8OPTDecoderLayer(
             module.embed_dim,
             module.self_attn.num_heads,
-            module.fc1.out_features
+            module.fc1.out_features,
+            quant_config
         )
-        int8_module.self_attn_layer_norm = LayerNormQ.from_float(
-            module.self_attn_layer_norm, attn_input_scale)
         int8_module.self_attn = Int8OPTAttention.from_float(
-            module.self_attn, attn_input_scale, q_output_scale, k_output_scale, v_output_scale, out_input_scale)
-        int8_module.final_layer_norm = LayerNormQ.from_float(
-            module.final_layer_norm, fc1_input_scale)
+            module.self_attn, quant_config, attn_input_scale, q_output_scale, k_output_scale, v_output_scale, out_input_scale)
         int8_module.fc1 = W8A8BFP32OFP32Linear.from_float(
-            module.fc1, fc1_input_scale)
+            module.fc1, fc1_input_scale, act_quant=int8_module.fc1_quant_type)
         int8_module.fc2 = W8A8BFP32OFP32Linear.from_float(
-            module.fc2, fc2_input_scale)
+            module.fc2, fc2_input_scale, act_quant=int8_module.fc2_quant_type)
+        if quant_config["qkv_proj"] == "per-tensor":
+            int8_module.self_attn_layer_norm = LayerNormQ.from_float(
+                module.self_attn_layer_norm, attn_input_scale)
+        else:
+            int8_module.self_attn_layer_norm = module.self_attn_layer_norm
+        if quant_config["fc1"] == "per-tensor":
+            int8_module.final_layer_norm = LayerNormQ.from_float(
+                module.final_layer_norm, fc1_input_scale)
+        else:
+            int8_module.final_layer_norm = module.final_layer_norm
         return int8_module
 
     def forward(
@@ -294,7 +305,7 @@ class Int8OPTDecoder(OPTPreTrainedModel):
 
     """
 
-    def __init__(self, config):
+    def __init__(self, config, quant_config):
         super().__init__(config)
         self.padding_idx = config.pad_token_id
         self.max_target_positions = config.max_position_embeddings
@@ -326,7 +337,7 @@ class Int8OPTDecoder(OPTPreTrainedModel):
             self.final_layer_norm = None
 
         self.layers = nn.ModuleList(
-            [Int8OPTDecoderLayer(config.hidden_size, config.num_attention_heads, config.ffn_dim) for _ in range(config.num_hidden_layers)])
+            [Int8OPTDecoderLayer(config.hidden_size, config.num_attention_heads, config.ffn_dim, quant_config) for _ in range(config.num_hidden_layers)])
 
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
@@ -335,62 +346,25 @@ class Int8OPTDecoder(OPTPreTrainedModel):
     get_input_embeddings = OPTDecoder.get_input_embeddings
     set_input_embeddings = OPTDecoder.set_input_embeddings
     _prepare_decoder_attention_mask = OPTDecoder._prepare_decoder_attention_mask
-    old_forward = OPTDecoder.forward
+    forward = OPTDecoder.forward
 
     @staticmethod
-    def from_float(module, decoder_layer_scales):
-        int8_module = Int8OPTDecoder(module.config)
+    def from_float(module, decoder_layer_scales, quant_config):
+        int8_module = Int8OPTDecoder(module.config, quant_config)
         int8_module.embed_tokens = module.embed_tokens
         int8_module.embed_positions = module.embed_positions
         int8_module.project_out = module.project_out
         int8_module.final_layer_norm = module.final_layer_norm
         for i, layer in enumerate(module.layers):
             int8_module.layers[i] = Int8OPTDecoderLayer.from_float(
-                layer, **decoder_layer_scales[i])
+                layer, quant_config, **decoder_layer_scales[i])
         return int8_module
-
-    def forward(
-        self,
-        input_ids: torch.LongTensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        head_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> BaseModelOutputWithPast:
-        # pad the input to the multiple of 16
-        input_len = input_ids.shape[1]
-        from torch.nn.functional import pad
-        if input_len % 16 != 0:
-            # <pad> is 1
-            padding_len = 16 - input_len % 16
-            input_ids = pad(input_ids, (0, padding_len), value=1)
-            if attention_mask is not None:
-                attention_mask = pad(attention_mask, (0, padding_len), value=0)
-        output = self.old_forward(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            head_mask=head_mask,
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states
-        )
-        # slice the output to the original length
-        if input_len % 16 != 0:
-            output.last_hidden_state = output.last_hidden_state[:,
-                                                                :input_len, :]
-        return output
 
 
 class Int8OPTModel(OPTPreTrainedModel):
-    def __init__(self, config: OPTConfig):
+    def __init__(self, config: OPTConfig, quant_config: dict[str, str]):
         super().__init__(config)
-        self.decoder = Int8OPTDecoder(config)
+        self.decoder = Int8OPTDecoder(config, quant_config)
         # Initialize weights and apply final processing
         self.post_init()
     get_input_embeddings = OPTModel.get_input_embeddings
@@ -399,19 +373,19 @@ class Int8OPTModel(OPTPreTrainedModel):
     forward = OPTModel.forward
 
     @staticmethod
-    def from_float(module, decoder_layer_scales):
-        int8_module = Int8OPTModel(module.config)
+    def from_float(module, decoder_layer_scales, quant_config):
+        int8_module = Int8OPTModel(module.config, quant_config)
         int8_module.decoder = Int8OPTDecoder.from_float(
-            module.decoder, decoder_layer_scales)
+            module.decoder, decoder_layer_scales, quant_config)
         return int8_module
 
 
 class Int8OPTForCausalLM(OPTPreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"lm_head.weight"]
 
-    def __init__(self, config):
+    def __init__(self, config, quant_config):
         super().__init__(config)
-        self.model = Int8OPTModel(config)
+        self.model = Int8OPTModel(config, quant_config)
 
         # the lm_head weight is automatically tied to the embed tokens weight
         self.lm_head = nn.Linear(
@@ -421,10 +395,10 @@ class Int8OPTForCausalLM(OPTPreTrainedModel):
         self.post_init()
 
     @staticmethod
-    def from_float(module, decoder_layer_scales):
-        int8_module = Int8OPTForCausalLM(module.config)
+    def from_float(module, decoder_layer_scales, quant_config):
+        int8_module = Int8OPTForCausalLM(module.config, quant_config)
         int8_module.model = Int8OPTModel.from_float(
-            module.model, decoder_layer_scales)
+            module.model, decoder_layer_scales, quant_config)
         int8_module.lm_head = module.lm_head
         return int8_module
 
