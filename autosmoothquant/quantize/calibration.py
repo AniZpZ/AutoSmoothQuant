@@ -16,6 +16,9 @@ from tqdm import tqdm
 def get_act_scales(model, tokenizer, dataset_path, num_samples=512, seq_len=512):
     model.eval()
     device = next(model.parameters()).device
+    # Only support pretraining_tp=1 when capturing activation for now
+    if hasattr(model.config, "pretraining_tp"):
+        model.config.pretraining_tp = 1 
     act_scales = {}
 
     def stat_tensor(name, tensor):
