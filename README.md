@@ -55,6 +55,7 @@ python smoothquant_model.py -help
 - inference with vLLM 
   
   Comming soon (this [PR](https://github.com/vllm-project/vllm/pull/1508) could be reference)
+  
   If you want to test quantized models with the PR mentioned above, only Llama is supported and quant config should be
 
   ```json
