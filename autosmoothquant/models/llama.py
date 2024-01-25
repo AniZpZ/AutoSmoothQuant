@@ -54,6 +54,7 @@ _RMSNorm = {
     "per-tensor": Int8LlamaRMSNorm,
     "per-token": LlamaRMSNorm
 }
+
 class Int8LlamaAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
     def __init__(
