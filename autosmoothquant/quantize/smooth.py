@@ -3,8 +3,9 @@ import torch.nn as nn
 
 from transformers.models.opt.modeling_opt import OPTDecoderLayer
 from transformers.models.bloom.modeling_bloom import BloomBlock
-from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaAttention, LlamaRMSNorm
-from autosmoothquant.thirdparty.baichuan.modeling_baichuan import RMSNorm, BaichuanLayer, BaichuanAttention
+from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm
+from transformers.models.mixtral.modeling_mixtral import MixtralDecoderLayer, MixtralRMSNorm
+from autosmoothquant.thirdparty.baichuan.modeling_baichuan import RMSNorm, BaichuanLayer
 
 
 @torch.no_grad()
@@ -18,6 +19,8 @@ def smooth_ln_fcs(ln, fcs, act_scales, model_type = "transformers", alpha=0.5):
         assert isinstance(ln, LlamaRMSNorm)
     elif model_type == "baichuan":
         assert isinstance(ln, RMSNorm)
+    elif model_type == "mixtral":
+        assert isinstance(ln, MixtralRMSNorm)
     else:
         assert isinstance(ln, nn.LayerNorm)
 
@@ -84,4 +87,20 @@ def smooth_lm(model, scales, alpha=0.5):
             fcs = [module.mlp.gate_proj, module.mlp.up_proj]
             fcs_input_scales = scales[name + '.mlp.gate_proj']
             smooth_ln_fcs(ffn_ln, fcs, fcs_input_scales, "baichuan", alpha)
+        elif isinstance(module, MixtralDecoderLayer):
+            print(f"smooth mixtral model: {name}")
+            attn_ln = module.input_layernorm
+            qkv = [module.self_attn.q_proj,
+                   module.self_attn.k_proj, module.self_attn.v_proj]
+            qkv_input_scales = scales[name + '.self_attn.q_proj']
+            smooth_ln_fcs(attn_ln, qkv, qkv_input_scales, "mixtral", alpha)
+
+            ffn_ln = module.post_attention_layernorm #feed forward norm
+            fcs = [module.block_sparse_moe.gate]
+            for expert in module.block_sparse_moe.experts:
+                fcs.append(expert.w1)
+                fcs.append(expert.w3)
+            fcs_input_scales = scales[name + '.block_sparse_moe.gate']
+            smooth_ln_fcs(ffn_ln, fcs, fcs_input_scales, "mixtral", alpha)
+
             
