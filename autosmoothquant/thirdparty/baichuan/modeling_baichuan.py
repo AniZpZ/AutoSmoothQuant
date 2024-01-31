@@ -115,25 +115,6 @@ class RotaryEmbedding(torch.nn.Module):
             self.sin_cached[:, :, :seq_len, ...],
         )
 
-
-def rotate_half(x):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2:]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def apply_rotary_pos_emb(q, k, cos_, sin_, position_ids):
-    cos = cos_.squeeze(1).squeeze(0)  # [seq_len, dim]
-    sin = sin_.squeeze(1).squeeze(0)  # [seq_len, dim]
-    cos = cos[position_ids].unsqueeze(1)  # [bs, 1, seq_len, dim]
-    sin = sin[position_ids].unsqueeze(1)  # [bs, 1, seq_len, dim]
-    q_embed = (q.float() * cos) + (rotate_half(q.float()) * sin)
-    k_embed = (k.float() * cos) + (rotate_half(k.float()) * sin)
-    return q_embed.to(q.dtype), k_embed.to(k.dtype)
-
-
-
 ##baichuan 13B
 
 def _get_interleave(n):
@@ -642,13 +623,6 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
         super().__init__(config, *model_args, **model_kwargs)
         self.model = BaichuanModel(config)
         self.lm_head = NormHead(config.hidden_size, config.vocab_size, bias=False)
-        #if hasattr(config, "quantization_config") and config.quantization_config['load_in_4bit']:
-        if hasattr(config, "quantization_config") and isinstance(config.quantization_config, dict) and config.quantization_config.get('load_in_4bit', False):
-            try:
-                from .quantizer import quantize_offline, init_model_weight_int4
-            except ImportError:
-                raise ImportError(f"Needs quantize_offline to run quantize.")
-            quantize_offline(self, 4)
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -706,70 +680,6 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
             )
         else:
             model_kwargs = kwargs
-        
-        if hasattr(config, "quantization_config") and config.quantization_config['load_in_4bit']:
-            try:
-                from .quantizer import init_model_weight_int4
-                from accelerate import init_empty_weights, dispatch_model, infer_auto_device_map
-                from accelerate.utils import CustomDtype
-                from accelerate.utils import get_balanced_memory
-            except ImportError:
-                raise ImportError(f"Needs import model weight init func to run quantize.") 
-            # Instantiate model.
-            init_contexts = [no_init_weights(_enable=True)]
-            init_contexts.append(init_empty_weights())
-            with ContextManagers(init_contexts):
-                model = cls(config)
-            
-            model_file = os.path.join(pretrained_model_name_or_path, 'pytorch_model.bin')
-            state_dict = torch.load(model_file, map_location="cpu") 
-            model.is_quantized = True
-                        
-            device_map = kwargs.pop("device_map", None)
-            torch_dtype = kwargs.pop("torch_dtype", None)
-            if device_map is not None:
-                kwargs = {"no_split_module_classes": model._no_split_modules}
-                target_dtype = CustomDtype.INT4
-                max_memory = get_balanced_memory(
-                    model,
-                    dtype=target_dtype,
-                    low_zero=(device_map == "balanced_low_0"),
-                    max_memory=None,
-                    **kwargs,
-                )
-                kwargs["max_memory"] = max_memory
-                device_map = infer_auto_device_map(model, dtype=target_dtype, **kwargs)
-            model = init_model_weight_int4(config, model, state_dict)
-            
-            # Set model in evaluation mode to deactivate DropOut modules by default
-            model.eval()
-            # If it is a model with generation capabilities, attempt to load the generation config
-            if model.can_generate():
-                try:
-                    model.generation_config = GenerationConfig.from_pretrained(
-                        pretrained_model_name_or_path,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        resume_download=False,
-                        proxies=None,
-                        local_files_only=local_files_only,
-                        token=token,
-                        revision=revision,
-                        subfolder="",
-                        _from_auto=False,
-                        _from_pipeline=None,
-                        **kwargs,
-                    )
-                except (OSError, TypeError):
-                    logger.info(
-                        "Generation config file not found, using a generation config created from the model config."
-                    )
-                    pass
-            
-            if device_map is not None:
-                dispatch_model(model, device_map=device_map)
-            
-            return model
 
         return super(BaichuanForCausalLM, cls).from_pretrained(pretrained_model_name_or_path, *model_args, 
                 config=config, cache_dir=cache_dir, ignore_mismatched_sizes=ignore_mismatched_sizes, 
@@ -833,13 +743,6 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-    def quantize(self, bits: int):
-        try:
-            from .quantizer import quantize_online
-        except ImportError:
-            raise ImportError(f"Needs QLinear to run quantize.")
-        return quantize_online(self, bits)
         
     def prepare_inputs_for_generation(
         self,
