@@ -64,10 +64,10 @@ Model support list:
 | ---------| ----------------------------|
 | LLaMA-2  | 7B/13B/70B                  |
 | LLaMA    | 7B/13B/30B/65B              |
-| Mistral  | Soon                        |
+| Mixtral  | 8*7B                        |
 | OPT      | 6.7B/13B/30B                |
-| Baichuan-2 | 13B (7B Soon)             |
-| Baichuan | 13B (7B Soon)               |
+| Baichuan-2 | 7B/13B                    |
+| Baichuan | 7B/13B                      |
 
 ## Performance and inference efficency
 Detailed data comming soon
