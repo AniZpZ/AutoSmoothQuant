@@ -100,8 +100,8 @@ class Int8BaichuanAttention(nn.Module):
             raise ValueError(
                 f"hidden_size {self.hidden_size} is not divisible by num_heads {self.num_heads}"
             )
-        self.qkv_quant_type = quant_config["qkv_proj"]
-        self.o_quant_type = quant_config["o_proj"]
+        self.qkv_quant_type = quant_config["qkv"]
+        self.o_quant_type = quant_config["out"]
         self.qkv_size = [self.num_heads * self.head_dim] * 3
         self.W_pack = W8A8BFP32OFP32QKVLinear(self.qkv_size, self.hidden_size, 3 * self.num_heads * self.head_dim, act_quant=self.qkv_quant_type)
         self.o_proj = W8A8BFP32OFP32LinearWithQuantScale(self.num_heads * self.head_dim, self.hidden_size, act_quant=self.o_quant_type)
@@ -214,8 +214,8 @@ class Int8BaichuanMLP(nn.Module):
         super().__init__()
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
-        self.gate_up_quant_type = quant_config["gate_up_proj"]
-        self.down_quant_type = quant_config["down_proj"]
+        self.gate_up_quant_type = quant_config["fc1"]
+        self.down_quant_type = quant_config["fc2"]
         self.gate_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size, act_quant=self.gate_up_quant_type)
         self.down_proj = W8A8BFP32OFP32LinearWithQuantScale(self.intermediate_size, self.hidden_size, act_quant=self.down_quant_type)
         self.up_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size, act_quant=self.gate_up_quant_type)
@@ -264,8 +264,8 @@ class Int8BaichuanLayer(nn.Module):
             hidden_act=config.hidden_act,
             quant_config=quant_config
         )
-        input_layernorm_cls = _RMSNorm[quant_config["qkv_proj"]]
-        post_attention_layernorm_cls = _RMSNorm[quant_config["gate_up_proj"]]
+        input_layernorm_cls = _RMSNorm[quant_config["qkv"]]
+        post_attention_layernorm_cls = _RMSNorm[quant_config["fc1"]]
         self.input_layernorm = input_layernorm_cls(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = post_attention_layernorm_cls(
             config.hidden_size, eps=config.rms_norm_eps
@@ -305,14 +305,14 @@ class Int8BaichuanLayer(nn.Module):
             gate_input_scale,
             down_input_scale
         )
-        if quant_config["qkv_proj"] == "per-tensor":
+        if quant_config["qkv"] == "per-tensor":
             int8_module.input_layernorm = Int8BaichuanRMSNorm.from_float(
                 module.input_layernorm,
                 attn_input_scale
             )
         else:
             int8_module.input_layernorm = module.input_layernorm
-        if quant_config["gate_up_proj"] == "per-tensor":
+        if quant_config["fc1"] == "per-tensor":
             int8_module.post_attention_layernorm = Int8BaichuanRMSNorm.from_float(
                 module.post_attention_layernorm,
                 gate_input_scale

@@ -73,8 +73,8 @@ class Int8OPTAttention(nn.Module):
         self.scaling = self.head_dim**-0.5
         self.is_decoder = is_decoder
 
-        self.qkv_quant_type = quant_config["qkv_proj"]
-        self.o_quant_type = quant_config["o_proj"]
+        self.qkv_quant_type = quant_config["qkv"]
+        self.o_quant_type = quant_config["out"]
         self.k_proj = W8A8BFP32OFP32Linear(self.embed_dim, self.embed_dim, use_bias=self.enable_bias, act_quant=self.qkv_quant_type)
         self.v_proj = W8A8BFP32OFP32Linear(self.embed_dim, self.embed_dim, use_bias=self.enable_bias, act_quant=self.qkv_quant_type)
         self.q_proj = W8A8BFP32OFP32Linear(self.embed_dim, self.embed_dim, use_bias=self.enable_bias, act_quant=self.qkv_quant_type)
@@ -153,7 +153,7 @@ class Int8OPTDecoderLayer(nn.Module):
             module.fc1, fc1_input_scale, act_quant=int8_module.fc1_quant_type)
         int8_module.fc2 = W8A8BFP32OFP32LinearWithQuantScale.from_float(
             module.fc2, fc2_input_scale, act_quant=int8_module.fc2_quant_type)
-        if quant_config["qkv_proj"] == "per-tensor":
+        if quant_config["qkv"] == "per-tensor":
             int8_module.self_attn_layer_norm = Int8OPTLayerNorm.from_float(
                 module.self_attn_layer_norm, attn_input_scale)
         else:
