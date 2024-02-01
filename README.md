@@ -52,10 +52,10 @@ python smoothquant_model.py -help
 
   ```json
   {
-    "qkv_proj": "per-tensor",
-    "o_proj": "per-token",
-    "gate_up_proj": "per-tensor",
-    "down_proj": "per-token"
+    "qkv": "per-tensor",
+    "out": "per-token",
+    "fc1": "per-tensor",
+    "fc2": "per-token"
   }
   ```
   
