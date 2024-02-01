@@ -19,7 +19,8 @@ def _model_preprocess(model):
         original_top_k = model.model.layers[0].block_sparse_moe.top_k
         num_local_experts = getattr(model.config, "num_local_experts")
         info_dict["original_top_k"] = original_top_k
-        # To get all expert act scales, we set top_k to the number of total experts here.
+        #FIXME: To get all expert act scales, we set top_k to the number of total experts 
+        # which might have negative effects on generating sclaes
         for layer in model.model.layers:
             layer.block_sparse_moe.top_k = num_local_experts
     return info_dict

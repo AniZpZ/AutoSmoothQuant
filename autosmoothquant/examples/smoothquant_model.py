@@ -28,7 +28,7 @@ def parse_args():
                         help='where to save the act scales, activate when generating scales')
     parser.add_argument("--scale-input", type=str, default='scales/llama-13b',
                         help='where to save the act scales, activate when quantizing models')
-    parser.add_argument('--num-samples', type=int, default=4)
+    parser.add_argument('--num-samples', type=int, default=512)
     parser.add_argument('--seq-len', type=int, default=512)
     parser.add_argument("--model-output", type=str, default='quantized_model/llama-13b',
                         help='where to save the quantized models, activate when quantizing models')

@@ -62,8 +62,8 @@ class Int8LlamaAttention(nn.Module):
                 f" and `num_heads`: {self.num_heads})."
             )
         
-        self.qkv_quant_type = quant_config["qkv_proj"]
-        self.o_quant_type = quant_config["o_proj"]
+        self.qkv_quant_type = quant_config["qkv"]
+        self.o_quant_type = quant_config["out"]
         self.k_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.num_heads * self.head_dim, act_quant=self.qkv_quant_type)
         self.v_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.num_heads * self.head_dim, act_quant=self.qkv_quant_type)
         self.q_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.num_heads * self.head_dim, act_quant=self.qkv_quant_type)
@@ -99,8 +99,8 @@ class Int8LlamaMLP(nn.Module):
         self.config = config
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
-        self.gate_up_quant_type = quant_config["gate_up_proj"]
-        self.down_quant_type = quant_config["down_proj"]
+        self.gate_up_quant_type = quant_config["fc1"]
+        self.down_quant_type = quant_config["fc2"]
         self.gate_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size, act_quant=self.gate_up_quant_type)
         self.up_proj = W8A8BFP32OFP32Linear(self.hidden_size, self.intermediate_size, act_quant=self.gate_up_quant_type)
         self.down_proj = W8A8BFP32OFP32LinearWithQuantScale(self.intermediate_size, self.hidden_size, act_quant=self.down_quant_type)
@@ -170,14 +170,14 @@ class Int8LlamaDecoderLayer(nn.Module):
             gate_input_scale,
             down_input_scale
         )
-        if quant_config["qkv_proj"] == "per-tensor":
+        if quant_config["qkv"] == "per-tensor":
             int8_module.input_layernorm = Int8LlamaRMSNorm.from_float(
                 module.input_layernorm,
                 attn_input_scale
             )
         else:
             int8_module.input_layernorm = module.input_layernorm
-        if quant_config["gate_up_proj"] == "per-tensor":
+        if quant_config["fc1"] == "per-tensor":
             int8_module.post_attention_layernorm = Int8LlamaRMSNorm.from_float(
                 module.post_attention_layernorm,
                 gate_input_scale
