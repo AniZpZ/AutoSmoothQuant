@@ -67,6 +67,7 @@ class Int8BaichuanAttention(nn.Module):
     def __init__(
         self,
         config: BaichuanConfig,
+        position_embedding: str,
         quant_config: dict[str, str]
     ):
         super().__init__()
@@ -75,6 +76,7 @@ class Int8BaichuanAttention(nn.Module):
         self.num_heads = config.num_attention_heads
         self.head_dim = self.hidden_size // self.num_heads
         self.max_position_embeddings = config.model_max_length
+        self.position_embedding = position_embedding
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -85,6 +87,26 @@ class Int8BaichuanAttention(nn.Module):
         self.qkv_size = [self.num_heads * self.head_dim] * 3
         self.W_pack = W8A8BFP32OFP32QKVLinear(self.qkv_size, self.hidden_size, 3 * self.num_heads * self.head_dim, act_quant=self.qkv_quant_type)
         self.o_proj = W8A8BFP32OFP32LinearWithQuantScale(self.num_heads * self.head_dim, self.hidden_size, act_quant=self.o_quant_type)
+
+        if self.postion_embedding == "ALIBI":
+            alibi_slopes = _get_alibi_slopes(self.total_num_heads)
+            alibi_slopes = alibi_slopes[head_start:head_end].tolist()
+
+            scaling = self.head_dim**-0.5
+            self.attn = PagedAttention(self.num_heads,
+                                       self.head_dim,
+                                       scaling,
+                                       alibi_slopes=alibi_slopes)
+        else:
+            self.rotary_emb = get_rope(
+                self.head_dim,
+                rotary_dim=self.head_dim,
+                max_position=self.max_position_embeddings,
+                base=self.rope_theta,
+            )
+            self.scaling = self.head_dim**-0.5
+            self.attn = PagedAttention(self.num_heads, self.head_dim,
+                                       self.scaling)
     
     _shape = BaichuanAttention._shape
     
@@ -228,10 +250,10 @@ class Int8BaichuanMLP(nn.Module):
 
 
 class Int8BaichuanLayer(nn.Module):
-    def __init__(self, config: BaichuanConfig, quant_config: dict[str, str]):
+    def __init__(self, config: BaichuanConfig, position_embedding: str, quant_config: dict[str, str]):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = Int8BaichuanAttention(config=config, quant_config=quant_config)
+        self.self_attn = Int8BaichuanAttention(config=config, position_embedding, quant_config=quant_config)
         self.mlp = Int8BaichuanMLP(
             hidden_size=self.hidden_size,
             intermediate_size=config.intermediate_size,
@@ -327,7 +349,7 @@ class Int8BaichuanLayer(nn.Module):
         return outputs
 
 class Int8BaichuanModel(BaichuanPreTrainedModel):
-    def __init__(self, config: BaichuanConfig, quant_config: dict[str, str]):
+    def __init__(self, config: BaichuanConfig, position_embedding: str, quant_config: dict[str, str]):
         super().__init__(config)
         self.config = config
         self.padding_idx = config.pad_token_id
@@ -337,7 +359,7 @@ class Int8BaichuanModel(BaichuanPreTrainedModel):
             config.vocab_size, config.hidden_size, self.padding_idx
         )
         self.layers = torch.nn.ModuleList(
-            [Int8BaichuanLayer(config, quant_config) for _ in range(config.num_hidden_layers)]
+            [Int8BaichuanLayer(config, position_embedding, quant_config) for _ in range(config.num_hidden_layers)]
         )
         self.norm = RMSNorm(config.hidden_size, epsilon=config.rms_norm_eps)
 
@@ -364,12 +386,18 @@ class Int8BaichuanModel(BaichuanPreTrainedModel):
     get_alibi_mask = BaichuanModel.get_alibi_mask
     forward = BaichuanModel.forward
 
-class Int8BaichuanForCausalLM(BaichuanPreTrainedModel):
-    def __init__(self, config, quant_config, *model_args, **model_kwargs):
+class Int8BaichuanBaseForCausalLM(BaichuanPreTrainedModel):
+    def __init__(self, 
+                 config, 
+                 position_embedding: str,
+                 quant_config, 
+                 *model_args, 
+                 **model_kwargs):
         super().__init__(config, *model_args, **model_kwargs)
-        self.model = Int8BaichuanModel(config, quant_config)
+        self.model = Int8BaichuanModel(config, 
+                                       position_embedding, 
+                                       quant_config)
         self.lm_head = NormHead(config.hidden_size, config.vocab_size, bias=False)
-        #if hasattr(config, "quantization_config") and config.quantization_config['load_in_4bit']:
         if hasattr(config, "quantization_config") and isinstance(config.quantization_config, dict) and config.quantization_config.get('load_in_4bit', False):
             try:
                 from .quantizer import quantize_offline, init_model_weight_int4
@@ -396,3 +424,13 @@ class Int8BaichuanForCausalLM(BaichuanPreTrainedModel):
     get_decoder =  BaichuanForCausalLM.get_decoder
     forward =  BaichuanForCausalLM.forward
     prepare_inputs_for_generation =  BaichuanForCausalLM.prepare_inputs_for_generation
+
+class Int8BaichuanForCausalLM(Int8BaiChuanBaseForCausalLM):
+
+    def __init__(self,
+                 config,
+                 linear_method: Optional[LinearMethodBase] = None):
+        if config.hidden_size == 4096:  # 7b
+            super().__init__(config, "ROPE", linear_method)
+        else:  # 13b
+            super().__init__(config, "ALIBI", linear_method)

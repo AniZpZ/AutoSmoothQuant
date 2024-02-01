@@ -8,13 +8,32 @@ from collections import defaultdict
 from functools import partial
 import numpy as np
 from tqdm import tqdm
+from autosmoothquant.models import _MODEL_TYPE
 
-# _PARAM_PREFIX = {
-#     "llama": f"model.layers.{idx}.self_attn.q_proj"
-# }
+
+def _model_preprocess(model):
+    architectures = getattr(model.config, "architectures", [])
+    model_type = _MODEL_TYPE[architectures[0]]
+    info_dict = {"model_type": model_type}
+    if model_type == "mixtral":
+        original_top_k = model.model.layers[0].block_sparse_moe.top_k
+        num_local_experts = getattr(model.config, "num_local_experts")
+        info_dict["original_top_k"] = original_top_k
+        # To get all expert act scales, we set top_k to the number of total experts here.
+        for layer in model.model.layers:
+            layer.block_sparse_moe.top_k = num_local_experts
+    return info_dict
+
+def _model_postprocess(model, info_dict):
+    if info_dict["model_type"] == "mixtral":
+        original_top_k = info_dict["original_top_k"]
+        # Reset top_k to original top_k
+        for layer in model.model.layers:
+            layer.block_sparse_moe.top_k = original_top_k
 
 def get_act_scales(model, tokenizer, dataset_path, num_samples=512, seq_len=512):
     model.eval()
+    info_dict = _model_preprocess(model)
     device = next(model.parameters()).device
     # Only support pretraining_tp=1 when capturing activation for now
     if hasattr(model.config, "pretraining_tp"):
@@ -53,6 +72,8 @@ def get_act_scales(model, tokenizer, dataset_path, num_samples=512, seq_len=512)
 
     for h in hooks:
         h.remove()
+        
+    _model_postprocess(model, info_dict)
 
     return act_scales
 
@@ -125,6 +146,33 @@ def collect_baichuan_layer_scales(model, act_dict):
     return decoder_layer_scales
 
 @torch.no_grad()
+def collect_mixtral_layer_scales(model, act_dict):
+    decoder_layer_scales = []
+    for idx in range(model.config.num_hidden_layers):
+        scale_dict = {}
+        scale_dict["attn_input_scale"] = act_dict[
+            f"model.layers.{idx}.self_attn.q_proj"]['input'] / 127
+        scale_dict["q_output_scale"] = act_dict[
+            f"model.layers.{idx}.self_attn.q_proj"]['output'] / 127
+        scale_dict["k_output_scale"] = act_dict[
+            f"model.layers.{idx}.self_attn.k_proj"]['output'] / 127
+        scale_dict["v_output_scale"] = act_dict[
+            f"model.layers.{idx}.self_attn.v_proj"]['output'] / 127
+        scale_dict["out_input_scale"] = act_dict[
+            f"model.layers.{idx}.self_attn.o_proj"]['input'] / 127
+        # moe scales
+        scale_dict["moe_input_scale"] = act_dict[
+            f"model.layers.{idx}.block_sparse_moe.gate"]['input'] / 127
+        down_input_scales = []
+        num_local_experts = getattr(model.config, "num_local_experts")
+        for i in range(num_local_experts):
+            down_input_scales.append(act_dict[f"model.layers.{idx}.block_sparse_moe.experts.{i}.w2"]['input'] / 127)
+        scale_dict["down_input_scales"] = down_input_scales
+        decoder_layer_scales.append(scale_dict)
+
+    return decoder_layer_scales
+
+@torch.no_grad()
 def get_static_decoder_layer_scales(model,
                                     tokenizer,
                                     dataset_path,
@@ -178,6 +226,8 @@ def get_static_decoder_layer_scales(model,
         decoder_layer_scales = collect_llama_layer_scales(model, act_dict)
     elif model_type == "baichuan":
         decoder_layer_scales = collect_baichuan_layer_scales(model, act_dict)
+    elif model_type == "mixtral":
+        decoder_layer_scales = collect_mixtral_layer_scales(model, act_dict)
     else:
         raise ValueError(f"unsupport model type: {model_type}")
 
