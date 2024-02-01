@@ -46,23 +46,7 @@ def apply_rotary_pos_emb(q, k, cos_, sin_, position_ids):
     k_embed = (k.float() * cos) + (rotate_half(k.float()) * sin)
     return q_embed.to(q.dtype), k_embed.to(k.dtype)
 
-class Int8BaichuanRMSNorm(nn.Module):
-    def __init__(self, hidden_size, eps=1e-6):
-        super().__init__()
-        self.register_buffer('weight', torch.ones(hidden_size, dtype=torch.float32, requires_grad=False))
-        self.epsilon = eps
-    
-    def forward(self, hidden_states):
-        variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.epsilon)
-
-        # convert into half-precision
-        if self.weight.dtype in [torch.float16, torch.bfloat16]:
-            hidden_states = hidden_states.to(self.weight.dtype)
-
-        out = self.weight * hidden_states
-        int8_out = out.round().clamp(-128, 127).to(torch.int8)
-        return int8_out
+class Int8BaichuanRMSNorm(RMSNorm):    
     
     @staticmethod
     def from_float(module: RMSNorm,
@@ -70,14 +54,9 @@ class Int8BaichuanRMSNorm(nn.Module):
         int8_norm = Int8BaichuanRMSNorm(module.weight.numel(), module.epsilon)
 
         int8_norm.weight.to(module.weight.dtype)
-        int8_norm.weight = module.weight / output_scale
+        int8_norm.weight = torch.nn.Parameter(module.weight / output_scale)
 
         return int8_norm
-
-_RMSNorm = {
-    "per-tensor": Int8BaichuanRMSNorm,
-    "per-token": RMSNorm
-}
 
 # attention is the same as opt
 class Int8BaichuanAttention(nn.Module):
@@ -191,7 +170,7 @@ class Int8BaichuanAttention(nn.Module):
                     attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
                 )
 
-            attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1)
+            attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(value_states.dtype)
             attn_output = torch.matmul(attn_weights, value_states)
 
             attn_output = attn_output.transpose(1, 2)
@@ -264,12 +243,8 @@ class Int8BaichuanLayer(nn.Module):
             hidden_act=config.hidden_act,
             quant_config=quant_config
         )
-        input_layernorm_cls = _RMSNorm[quant_config["qkv"]]
-        post_attention_layernorm_cls = _RMSNorm[quant_config["fc1"]]
-        self.input_layernorm = input_layernorm_cls(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = post_attention_layernorm_cls(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
+        self.input_layernorm = Int8BaichuanRMSNorm(config.hidden_size, config.rms_norm_eps)
+        self.post_attention_layernorm = Int8BaichuanRMSNorm(config.hidden_size, config.rms_norm_eps)
     
     @staticmethod
     def from_float(module: BaichuanLayer,

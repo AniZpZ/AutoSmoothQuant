@@ -96,9 +96,9 @@ class Int8MixtralBLockSparseTop2MLP(nn.Module):
         super().__init__()
         self.ffn_dim = config.intermediate_size
         self.hidden_dim = config.hidden_size
-        self.w1 = W8A8BFP32OFP32Linear(self.hidden_dim, self.ffn_dim, act_quant=quant_config["w1"])
-        self.w2 = W8A8BFP32OFP32LinearWithQuantScale(self.ffn_dim, self.hidden_dim, act_quant=quant_config["w2"])
-        self.w3 = W8A8BFP32OFP32Linear(self.hidden_dim, self.ffn_dim, act_quant=quant_config["w1"])
+        self.w1 = W8A8BFP32OFP32Linear(self.hidden_dim, self.ffn_dim, act_quant=quant_config["fc1"])
+        self.w2 = W8A8BFP32OFP32LinearWithQuantScale(self.ffn_dim, self.hidden_dim, act_quant=quant_config["fc2"])
+        self.w3 = W8A8BFP32OFP32Linear(self.hidden_dim, self.ffn_dim, act_quant=quant_config["fc1"])
 
         self.act_fn = ACT2FN[config.hidden_act]
 
@@ -111,9 +111,9 @@ class Int8MixtralBLockSparseTop2MLP(nn.Module):
                    moe_input_scale: float,
                    down_input_scale: float):
         int8_module = Int8MixtralBLockSparseTop2MLP(config, quant_config)
-        int8_module.w1 = W8A8BFP32OFP32Linear.from_float(module.w1, moe_input_scale, act_quant=quant_config["w1"])
-        int8_module.w2 = W8A8BFP32OFP32LinearWithQuantScale.from_float(module.w2, down_input_scale, act_quant=quant_config["w2"])
-        int8_module.w3 = W8A8BFP32OFP32Linear.from_float(module.w3, moe_input_scale, act_quant=quant_config["w1"])
+        int8_module.w1 = W8A8BFP32OFP32Linear.from_float(module.w1, moe_input_scale, act_quant=quant_config["fc1"])
+        int8_module.w2 = W8A8BFP32OFP32LinearWithQuantScale.from_float(module.w2, down_input_scale, act_quant=quant_config["fc2"])
+        int8_module.w3 = W8A8BFP32OFP32Linear.from_float(module.w3, moe_input_scale, act_quant=quant_config["fc1"])
         return int8_module 
     
 
@@ -150,7 +150,6 @@ class Int8MixtralSparseMoeBlock(nn.Module):
                    moe_input_scale: float,
                    down_input_scales: List[float]):
         int8_module = Int8MixtralSparseMoeBlock(config, quant_config)
-        # int8_module.gate = W8A8BFP32OFP32Linear.from_float(module.gate, moe_input_scale, act_quant=quant_config["w1"])
         int8_module.gate = module.gate
         for i, expert in enumerate(module.experts):
             int8_module.experts[i] = Int8MixtralBLockSparseTop2MLP.from_float(
@@ -214,7 +213,7 @@ class Int8MixtralDecoderLayer(nn.Module):
             )
         else:
             int8_module.input_layernorm = module.input_layernorm
-        if quant_config["w1"] == "per-tensor":
+        if quant_config["fc1"] == "per-tensor":
             int8_module.post_attention_layernorm = Int8MixtralRMSNorm.from_float(
                 module.post_attention_layernorm,
                 moe_input_scale
