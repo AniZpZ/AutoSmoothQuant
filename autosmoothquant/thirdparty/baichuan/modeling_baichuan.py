@@ -31,6 +31,91 @@ except ImportError:
         "Xformers is not installed correctly. If you want to use memory_efficient_attention to accelerate training use the following command to install Xformers\npip install xformers."
     )
 
+## copy from baichuan 7B
+# Copied from transformers.models.bart.modeling_bart._make_causal_mask
+def _make_causal_mask(
+        input_ids_shape: torch.Size, dtype: torch.dtype, device: torch.device, past_key_values_length: int = 0
+):
+    """
+    Make causal mask used for bi-directional self-attention.
+    """
+    bsz, tgt_len = input_ids_shape
+    mask = torch.full((tgt_len, tgt_len), torch.tensor(torch.finfo(dtype).min, device=device), device=device)
+    mask_cond = torch.arange(mask.size(-1), device=device)
+    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
+    mask = mask.to(dtype)
+
+    if past_key_values_length > 0:
+        mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
+    return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
+
+def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
+    """
+    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
+    """
+    if len(mask.size()) == 3:
+        bsz, src_len, _ = mask.size()
+        tgt_len = tgt_len if tgt_len is not None else src_len
+        expanded_mask = mask[:,None,:,:].expand(bsz, 1, tgt_len, src_len).to(dtype)
+    else:
+        bsz, src_len = mask.size()
+        tgt_len = tgt_len if tgt_len is not None else src_len
+        expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+
+    inverted_mask = 1.0 - expanded_mask
+
+    return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        RMSNorm is equivalent to T5LayerNorm
+        """
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+
+        # convert into half-precision if necessary
+        if self.weight.dtype in [torch.float16, torch.bfloat16]:
+            hidden_states = hidden_states.to(self.weight.dtype)
+
+        return self.weight * hidden_states
+
+
+class RotaryEmbedding(torch.nn.Module):
+    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
+        super().__init__()
+        self.inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float().to(device) / dim))
+        self.max_seq_len_cached = max_position_embeddings
+        t = torch.arange(self.max_seq_len_cached, device=self.inv_freq.device, dtype=torch.float32)
+        freqs = torch.outer(t, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.cos_cached = emb.cos()[None, None, :, :].to(torch.float32)
+        self.sin_cached = emb.sin()[None, None, :, :].to(torch.float32)
+    def forward(self, x, seq_len=None):
+        # x: [bs, num_attention_heads, seq_len, head_size]
+        # This `if` block is unlikely to be run after we build sin/cos in `__init__`. Keep the logic here just in case.
+        if seq_len > self.max_seq_len_cached:
+            self.max_seq_len_cached = seq_len
+            t = torch.arange(self.max_seq_len_cached, device=self.inv_freq.device, dtype=torch.float32)
+            freqs = torch.outer(t, self.inv_freq)
+            emb = torch.cat((freqs, freqs), dim=-1)
+            self.cos_cached = emb.cos()[None, None, :, :].to(torch.float32).to(x.device)
+            self.sin_cached = emb.sin()[None, None, :, :].to(torch.float32).to(x.device)
+        elif self.cos_cached.device != x.device:
+            self.cos_cached = self.cos_cached.to(x.device)
+            self.sin_cached = self.sin_cached.to(x.device)  
+        return (
+            self.cos_cached[:, :, :seq_len, ...],
+            self.sin_cached[:, :, :seq_len, ...],
+        )
+
+##baichuan 13B
 
 def _get_interleave(n):
     def _get_interleave_power_of_2(n):
@@ -538,13 +623,6 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
         super().__init__(config, *model_args, **model_kwargs)
         self.model = BaichuanModel(config)
         self.lm_head = NormHead(config.hidden_size, config.vocab_size, bias=False)
-        #if hasattr(config, "quantization_config") and config.quantization_config['load_in_4bit']:
-        if hasattr(config, "quantization_config") and isinstance(config.quantization_config, dict) and config.quantization_config.get('load_in_4bit', False):
-            try:
-                from .quantizer import quantize_offline, init_model_weight_int4
-            except ImportError:
-                raise ImportError(f"Needs quantize_offline to run quantize.")
-            quantize_offline(self, 4)
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -602,70 +680,6 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
             )
         else:
             model_kwargs = kwargs
-        
-        if hasattr(config, "quantization_config") and config.quantization_config['load_in_4bit']:
-            try:
-                from .quantizer import init_model_weight_int4
-                from accelerate import init_empty_weights, dispatch_model, infer_auto_device_map
-                from accelerate.utils import CustomDtype
-                from accelerate.utils import get_balanced_memory
-            except ImportError:
-                raise ImportError(f"Needs import model weight init func to run quantize.") 
-            # Instantiate model.
-            init_contexts = [no_init_weights(_enable=True)]
-            init_contexts.append(init_empty_weights())
-            with ContextManagers(init_contexts):
-                model = cls(config)
-            
-            model_file = os.path.join(pretrained_model_name_or_path, 'pytorch_model.bin')
-            state_dict = torch.load(model_file, map_location="cpu") 
-            model.is_quantized = True
-                        
-            device_map = kwargs.pop("device_map", None)
-            torch_dtype = kwargs.pop("torch_dtype", None)
-            if device_map is not None:
-                kwargs = {"no_split_module_classes": model._no_split_modules}
-                target_dtype = CustomDtype.INT4
-                max_memory = get_balanced_memory(
-                    model,
-                    dtype=target_dtype,
-                    low_zero=(device_map == "balanced_low_0"),
-                    max_memory=None,
-                    **kwargs,
-                )
-                kwargs["max_memory"] = max_memory
-                device_map = infer_auto_device_map(model, dtype=target_dtype, **kwargs)
-            model = init_model_weight_int4(config, model, state_dict)
-            
-            # Set model in evaluation mode to deactivate DropOut modules by default
-            model.eval()
-            # If it is a model with generation capabilities, attempt to load the generation config
-            if model.can_generate():
-                try:
-                    model.generation_config = GenerationConfig.from_pretrained(
-                        pretrained_model_name_or_path,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        resume_download=False,
-                        proxies=None,
-                        local_files_only=local_files_only,
-                        token=token,
-                        revision=revision,
-                        subfolder="",
-                        _from_auto=False,
-                        _from_pipeline=None,
-                        **kwargs,
-                    )
-                except (OSError, TypeError):
-                    logger.info(
-                        "Generation config file not found, using a generation config created from the model config."
-                    )
-                    pass
-            
-            if device_map is not None:
-                dispatch_model(model, device_map=device_map)
-            
-            return model
 
         return super(BaichuanForCausalLM, cls).from_pretrained(pretrained_model_name_or_path, *model_args, 
                 config=config, cache_dir=cache_dir, ignore_mismatched_sizes=ignore_mismatched_sizes, 
@@ -729,13 +743,6 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-    def quantize(self, bits: int):
-        try:
-            from .quantizer import quantize_online
-        except ImportError:
-            raise ImportError(f"Needs QLinear to run quantize.")
-        return quantize_online(self, bits)
         
     def prepare_inputs_for_generation(
         self,

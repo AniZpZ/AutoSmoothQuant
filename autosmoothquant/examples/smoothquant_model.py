@@ -10,30 +10,9 @@ from torch import nn
 from transformers import AutoTokenizer
 from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 
-from autosmoothquant.models.llama import Int8LlamaForCausalLM
-from autosmoothquant.models.baichuan import Int8BaichuanForCausalLM
-from autosmoothquant.models.opt import Int8OPTForCausalLM
+from autosmoothquant.models import _MODEL_TYPE, _MODEL_REGISTRY, _CONFIG_REGISTRY
 from autosmoothquant.quantize.smooth import smooth_lm
 from autosmoothquant.quantize.calibration import get_act_scales, get_static_decoder_layer_scales
-from autosmoothquant.thirdparty.baichuan.configuration_baichuan import BaichuanConfig
-
-_MODEL_REGISTRY = {
-    "LlamaForCausalLM": Int8LlamaForCausalLM,
-    "LLaMAForCausalLM": Int8LlamaForCausalLM,
-    "BaichuanForCausalLM": Int8BaichuanForCausalLM,
-    "OPTForCausalLM": Int8OPTForCausalLM
-}
-
-_CONFIG_REGISTRY = {
-    "baichuan": BaichuanConfig,
-}
-
-_MODEL_TYPE = {
-    "LlamaForCausalLM": "llama",
-    "LLaMAForCausalLM": "llama",
-    "BaichuanForCausalLM": "baichuan",
-    "OPTForCausalLM": "transformers"
-}
 
 def parse_args():
     parser = argparse.ArgumentParser()

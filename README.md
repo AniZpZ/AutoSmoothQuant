@@ -18,27 +18,19 @@ pip install -e .
 ## Usage
 ### quantize model
 First add a config file named "quant_config.json" to model path.
-For Baichuan or Llama model, config should be like:
+For currenttly supported models, config should be like:
 
 ```json
 {
-  "qkv_proj": "per-tensor",
-  "o_proj": "per-tensor",
-  "gate_up_proj": "per-tensor",
-  "down_proj": "per-tensor"
-}
-```
-
-As for Opt model, config should be like:
-
-```json
-{
-  "qkv_proj": "per-tensor",
-  "o_proj": "per-tensor",
+  "qkv": "per-tensor",
+  "out": "per-tensor",
   "fc1": "per-tensor",
   "fc2": "per-tensor"
 }
 ```
+
+"qkv" stands for QKV matmul of attention, "out" stands for out matmul of attention.
+"fc1" and "fc2" are the layers of the FFNs, which might be referred to as "gate_up" and "down" in Llama-like models.
 You can set the value to "per-tensor" or "per-token" to perform the quant granularity you want.
 
 Once config is set, generate scales and do model quantization with following command:
@@ -84,10 +76,24 @@ Model support list:
 | ---------| ----------------------------|
 | LLaMA-2  | 7B/13B/70B                  |
 | LLaMA    | 7B/13B/30B/65B              |
-| Mistral  | Soon                        |
-| OPT      | 6.7B/13B/30B |
-| Baichuan-2 | 13B (7B Soon)             |
-| Baichuan | 13B (7B Soon)               |
+| Mixtral  | 8*7B                        |
+| OPT      | 6.7B/13B/30B                |
+| Baichuan-2 | 7B/13B                    |
+| Baichuan | 7B/13B                      |
+
+## Performance and inference efficency
+Detailed data comming soon
+
+Cases:
+
+[codellama-13b with A40](https://github.com/vllm-project/vllm/pull/1508#issuecomment-1824133140). Tested with vLLM
+
+[llama-13b with A100](https://github.com/vllm-project/vllm/pull/1508#issuecomment-1853826414). Tested with vLLM
+
+
+
+
+
 
 ## Reference
 If you find SmoothQuant useful or relevant to your research, please cite their paper:

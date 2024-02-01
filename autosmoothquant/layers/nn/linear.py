@@ -48,8 +48,7 @@ class W8A8BFP32OFP32Linear(torch.nn.Module):
         if self.use_bias:
             self.register_buffer(
                 "bias",
-                torch.zeros(
-                    (1, self.out_features), dtype=torch.float32, requires_grad=False
+                torch.zeros(self.out_features, dtype=torch.float32, requires_grad=False
                 ),
             )
         self.register_buffer(
@@ -74,6 +73,7 @@ class W8A8BFP32OFP32Linear(torch.nn.Module):
     @torch.no_grad()
     def forward(self, x):
         x_shape = x.shape
+        dtype = x.dtype
         x = x.view(-1, x_shape[-1])
         if self.act_quant == "per-token":
             quant_scale = (
@@ -82,6 +82,7 @@ class W8A8BFP32OFP32Linear(torch.nn.Module):
             x = (x / quant_scale).round().clamp(-128, 127).to(torch.int8)
             dequant_scale = self.dequant_scale.item() * quant_scale
         else:
+            x = x.round().clamp(-128, 127).to(torch.int8)
             dequant_scale = self.dequant_scale.item()
         out = torch.empty(
             x.shape[0],
@@ -91,7 +92,7 @@ class W8A8BFP32OFP32Linear(torch.nn.Module):
         )
         self.i8cugemm.linear_a8_w8_o32_(x, self.weight, out)
         out = dequant_scale * out + self.bias if self.use_bias else dequant_scale * out
-        out = out.view(*x_shape[:-1], -1)
+        out = out.view(*x_shape[:-1], -1).to(dtype)
         return out
 
     @staticmethod
@@ -161,6 +162,7 @@ class W8A8BFP32OFP32QKVLinear(W8A8BFP32OFP32Linear):
     @torch.no_grad()
     def forward(self, x):
         x_shape = x.shape
+        dtype = x.dtype
         x = x.view(-1, x_shape[-1])
         if self.act_quant == "per-token":
             quant_scale = (
@@ -171,6 +173,7 @@ class W8A8BFP32OFP32QKVLinear(W8A8BFP32OFP32Linear):
             k_dequant_scale = self.k_dequant_scale.item() * quant_scale
             v_dequant_scale = self.v_dequant_scale.item() * quant_scale
         else:
+            x = x.round().clamp(-128, 127).to(torch.int8)
             q_dequant_scale = self.q_dequant_scale.item()
             k_dequant_scale = self.k_dequant_scale.item()
             v_dequant_scale = self.v_dequant_scale.item()
@@ -191,7 +194,7 @@ class W8A8BFP32OFP32QKVLinear(W8A8BFP32OFP32Linear):
             k_dq += k_bias
             v_dq += v_bias
         out = torch.cat([q_dq, k_dq, v_dq], dim=-1)
-        out = out.view(*x_shape[:-1], -1)
+        out = out.view(*x_shape[:-1], -1).to(dtype)
         return out
 
     @staticmethod
@@ -265,6 +268,7 @@ class W8A8BFP32OFP32LinearWithQuantScale(W8A8BFP32OFP32Linear):
     @torch.no_grad()
     def forward(self, x):
         x_shape = x.shape
+        dtype = x.dtype
         x = x.view(-1, x_shape[-1])
         if self.act_quant == "per-token":
             quant_scale = (
@@ -284,7 +288,7 @@ class W8A8BFP32OFP32LinearWithQuantScale(W8A8BFP32OFP32Linear):
         )
         self.i8cugemm.linear_a8_w8_o32_(x, self.weight, out)
         out = dequant_scale * out + self.bias if self.use_bias else dequant_scale * out
-        out = out.view(*x_shape[:-1], -1)
+        out = out.view(*x_shape[:-1], -1).to(dtype)
         return out
 
     @staticmethod
@@ -307,9 +311,7 @@ class W8A8BFP32OFP32LinearWithQuantScale(W8A8BFP32OFP32Linear):
             alpha = weight_scale
         else:
             alpha = input_scale * weight_scale
-            int8_module.quant_scale = torch.tensor(input_scale, dtype=torch.float32).to(
-                save_device
-            )
+            int8_module.quant_scale = torch.tensor(input_scale, dtype=torch.float32).to(save_device)
         int8_module.dequant_scale = alpha.to(torch.float32).to(save_device)
         int8_module.weight = int8_weight.to(save_device)
         if int8_module.use_bias:
