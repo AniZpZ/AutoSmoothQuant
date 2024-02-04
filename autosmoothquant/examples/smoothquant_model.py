@@ -32,6 +32,8 @@ def parse_args():
     parser.add_argument('--seq-len', type=int, default=512)
     parser.add_argument("--model-output", type=str, default='quantized_model/llama-13b',
                         help='where to save the quantized models, activate when quantizing models')
+    parser.add_argument("--smooth-strength", type=float, default=0.5,
+                        help='migration strength of smoothquant, should be in a range of (0, 1)')
     args = parser.parse_args()
     return args
 
@@ -96,7 +98,7 @@ def main():
     
     if args.quantize_model:
         act_scales = torch.load(args.scale_input)
-        smooth_lm(model, act_scales, 0.5)
+        smooth_lm(model, act_scales, args.smooth_strength)
         config = get_config(args.model_path)
         quant_model_class, model_type = get_model_architecture(config)
         decoder_layer_scales, _ = get_static_decoder_layer_scales(model,

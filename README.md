@@ -36,7 +36,7 @@ You can set the value to "per-tensor" or "per-token" to perform the quant granul
 Once config is set, generate scales and do model quantization with following command:
 ```
 cd autosmoothquant/examples
-python3 smoothquant_model.py --model-path=/path/to/model --quantize-model=True --generate-scale=True --dataset-path=/path/to/dataset
+python3 smoothquant_model.py --model-path=/path/to/model --quantize-model=True --generate-scale=True --dataset-path=/path/to/dataset --smooth-strength=0.5
 ```
 
 use following command for more information 
