@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 
 from transformers.models.opt.modeling_opt import OPTDecoderLayer
-from transformers.models.bloom.modeling_bloom import BloomBlock
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm
 from transformers.models.mixtral.modeling_mixtral import MixtralDecoderLayer, MixtralRMSNorm
 from autosmoothquant.thirdparty.baichuan.modeling_baichuan import RMSNorm, BaichuanLayer
@@ -53,16 +52,6 @@ def smooth_lm(model, scales, alpha=0.5):
             ffn_ln = module.final_layer_norm
             fc1 = module.fc1
             fc1_input_scales = scales[name + '.fc1']
-            smooth_ln_fcs(ffn_ln, fc1, fc1_input_scales, "transformers", alpha)
-        elif isinstance(module, BloomBlock):
-            attn_ln = module.input_layernorm
-            qkv = module.self_attention.query_key_value
-            qkv_input_scales = scales[name + '.self_attention.query_key_value']
-            smooth_ln_fcs(attn_ln, qkv, qkv_input_scales, "transformers", alpha)
-
-            ffn_ln = module.post_attention_layernorm
-            fc1 = module.mlp.dense_h_to_4h
-            fc1_input_scales = scales[name + '.mlp.dense_h_to_4h']
             smooth_ln_fcs(ffn_ln, fc1, fc1_input_scales, "transformers", alpha)
         elif isinstance(module, LlamaDecoderLayer):
             print(f"smooth llama model: {name}")
