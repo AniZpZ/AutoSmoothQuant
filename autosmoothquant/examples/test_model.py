@@ -4,6 +4,7 @@ import argparse
 import json
 
 from autosmoothquant.models import Int8LlamaForCausalLM, Int8OPTForCausalLM, Int8BaichuanForCausalLM, Int8MixtralForCausalLM
+from autosmoothquant.utils import parse_quant_config
 from transformers import AutoTokenizer
 
 def parse_args():
@@ -18,12 +19,6 @@ def parse_args():
                         default='You are right, But Genshin Impact is', help='prompts')   
     args = parser.parse_args()
     return args
-
-def parse_quant_config(config_path):
-  data = {}
-  with open(config_path, 'r', encoding='utf-8') as file:
-    data = json.load(file)
-  return data
 
 @torch.no_grad()
 def main():
