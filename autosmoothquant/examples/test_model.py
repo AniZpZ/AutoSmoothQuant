@@ -37,13 +37,13 @@ def main():
     # Consider setting the default data type to torch.float16 to speed up, but this may decrease model performance.
     # torch.set_default_dtype(torch.float16)
     if args.model_class == "llama":
-      model = Int8LlamaForCausalLM.from_pretrained(args.model_path, quant_config, device_map="sequential")
+      model = Int8LlamaForCausalLM.from_pretrained(args.model_path, quant_config, attn_implementation="eager", device_map="sequential")
     elif args.model_class == "baichuan":
-      model = Int8BaichuanForCausalLM.from_pretrained(args.model_path, quant_config, device_map="sequential")
+      model = Int8BaichuanForCausalLM.from_pretrained(args.model_path, quant_config, attn_implementation="eager", device_map="sequential")
     elif args.model_class == "opt":
-      model = Int8OPTForCausalLM.from_pretrained(args.model_path, quant_config, device_map="sequential")
+      model = Int8OPTForCausalLM.from_pretrained(args.model_path, quant_config, attn_implementation="eager", device_map="sequential")
     elif args.model_class == "mixtral":
-      model = Int8MixtralForCausalLM.from_pretrained(args.model_path, quant_config, device_map="sequential")
+      model = Int8MixtralForCausalLM.from_pretrained(args.model_path, quant_config, attn_implementation="eager", device_map="sequential")
     else:
       raise ValueError(
         f"Model type {args.model_class} are not supported for now.")
