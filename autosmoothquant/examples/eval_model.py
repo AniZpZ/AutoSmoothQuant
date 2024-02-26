@@ -87,6 +87,7 @@ def benchmarks(lm, args):
             tasks=pattern_match(args.tasks.split(","), TaskManager().all_tasks),
             num_fewshot=args.num_fewshot,
             limit=args.limit,
+            batch_size=args.batch_size,
         )
         update_results(results, t_results)
     return results

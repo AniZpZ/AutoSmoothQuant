@@ -86,7 +86,10 @@ class quant_model(BaseLM):
 
     @property
     def max_length(self):
-        return self.model.config.max_sequence_length
+        try:
+            return self.model.config.max_sequence_length
+        except AttributeError:
+            return self.model.config.max_position_embeddings
 
     @property
     def max_gen_toks(self):
