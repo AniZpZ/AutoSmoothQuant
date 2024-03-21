@@ -11,10 +11,10 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model-path', type=str,
                         default='models/llama-13b', help='model path contains weights and config etc')
-    parser.add_argument('--quantize-model', type=bool,
-                        default=True, help='whether to quant model or not')    
-    parser.add_argument('--generate-scale', type=bool,
-                        default=True, help='whether to generate scale or not')                  
+    parser.add_argument('--quantize-model',action="store_true",
+                        help='whether to quant model or not')
+    parser.add_argument('--generate-scale', action="store_true",
+                        help='whether to generate scale or not')
     parser.add_argument('--dataset-path', type=str, default='dataset/val.jsonl.zst',
                         help='location of the calibration dataset')
     parser.add_argument('--scale-output', type=str, default='scales/llama-13b',

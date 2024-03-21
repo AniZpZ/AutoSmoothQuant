@@ -2,10 +2,15 @@
 
 AutoSmoothQuant is an easy-to-use package for implementing smoothquant for LLMs. AutoSmoothQuant speeds up model inference under various workloads. AutoSmoothQuant was created and improved upon from the [original work](https://github.com/mit-han-lab/smoothquant) from MIT.
 
+## News or Update
+- [2024/03] We support model evaluation with [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness)
+- [2024/02] We support Mixtral and Baichuan model
+
 ## Install
 ### Prerequisites
 - Your GPU(s) must be of Compute Capability 8.0 or higher. Amphere and later architectures are supported.
 - Your CUDA version must be CUDA 11.4 or later.
+- Python 3.9+
 ### Build from source
 Currently this repo only support build form source. We will release package soon.
 
