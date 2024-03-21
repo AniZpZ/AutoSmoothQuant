@@ -67,7 +67,19 @@ python3 test_model.py --model-path=/path/to/model --tokenizer-path=/path/to/toke
 ```
 
 ### benchmark
+  #### inference speed
   Comming soon  (this [PR](https://github.com/vllm-project/vllm/pull/1508) could be reference)
+
+  #### model evaluation
+  Currently you need to install latest [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) from source in the same path with AutoSmoothQuant repo.
+    
+  ```
+  git clone https://github.com/EleutherAI/lm-evaluation-harness.git
+  cd lm-evaluation-harness
+  pip install -e .
+  cd ../AutoSmoothQuant/autosmoothquant/example
+  python3 eval_model.py -model-path=/path/to/model --tokenizer-path=/path/to/tokenizer
+  ```
 
 ## Supported models
 Model support list:
