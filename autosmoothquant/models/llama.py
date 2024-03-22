@@ -24,7 +24,7 @@ class Int8LlamaRMSNorm(LlamaRMSNorm):
         int8_module = Int8LlamaRMSNorm(module.weight.numel(), module.variance_epsilon)
 
         int8_module.weight.to(module.weight.dtype)
-        int8_module.weight = module.weight / output_scale
+        int8_module.weight = nn.Parameter(module.weight / output_scale)
 
         return int8_module
 

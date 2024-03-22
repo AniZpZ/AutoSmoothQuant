@@ -94,8 +94,6 @@ class Int8OPTAttention(nn.Module):
                    v_output_scale: float,
                    out_input_scale: float):
         int8_module = Int8OPTAttention(config, quant_config, is_decoder=True)
-        module.q_proj.weight *= module.scaling
-        module.q_proj.bias *= module.scaling
         int8_module.q_proj = W8A8BFP32OFP32Linear.from_float(
             module.q_proj, input_scale, act_quant=int8_module.qkv_quant_type)
         int8_module.k_proj = W8A8BFP32OFP32Linear.from_float(
