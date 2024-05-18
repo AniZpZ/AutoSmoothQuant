@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
+import sys
 
+sys.path.append("./smoothquant")
 from datasets import load_dataset
 import functools
 from collections import defaultdict
@@ -8,7 +10,7 @@ from collections import defaultdict
 from functools import partial
 import numpy as np
 from tqdm import tqdm
-from autosmoothquant.models import _MODEL_TYPE
+from models import _MODEL_TYPE
 
 
 def _model_preprocess(model):
@@ -19,11 +21,12 @@ def _model_preprocess(model):
         original_top_k = model.model.layers[0].block_sparse_moe.top_k
         num_local_experts = getattr(model.config, "num_local_experts")
         info_dict["original_top_k"] = original_top_k
-        #FIXME: To get all expert act scales, we set top_k to the number of total experts 
+        # FIXME: To get all expert act scales, we set top_k to the number of total experts
         # which might have negative effects on generating sclaes
         for layer in model.model.layers:
             layer.block_sparse_moe.top_k = num_local_experts
     return info_dict
+
 
 def _model_postprocess(model, info_dict):
     if info_dict["model_type"] == "mixtral":
@@ -32,13 +35,14 @@ def _model_postprocess(model, info_dict):
         for layer in model.model.layers:
             layer.block_sparse_moe.top_k = original_top_k
 
+
 def get_act_scales(model, tokenizer, dataset_path, num_samples=512, seq_len=512):
     model.eval()
     info_dict = _model_preprocess(model)
     device = next(model.parameters()).device
     # Only support pretraining_tp=1 when capturing activation for now
     if hasattr(model.config, "pretraining_tp"):
-        model.config.pretraining_tp = 1 
+        model.config.pretraining_tp = 1
     act_scales = {}
 
     def stat_tensor(name, tensor):
@@ -73,10 +77,11 @@ def get_act_scales(model, tokenizer, dataset_path, num_samples=512, seq_len=512)
 
     for h in hooks:
         h.remove()
-        
+
     _model_postprocess(model, info_dict)
 
     return act_scales
+
 
 @torch.no_grad()
 def collect_transformers_layer_scales(model, act_dict):
@@ -84,19 +89,45 @@ def collect_transformers_layer_scales(model, act_dict):
     for idx in range(model.config.num_hidden_layers):
         scale_dict = {}
         scale_dict["attn_input_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.self_attn.q_proj"]['input'] / 127
+                                             f"model.decoder.layers.{idx}.self_attn.q_proj"]['input'] / 127
         scale_dict["q_output_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.self_attn.q_proj"]['output'] / 127
+                                           f"model.decoder.layers.{idx}.self_attn.q_proj"]['output'] / 127
         scale_dict["k_output_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.self_attn.k_proj"]['output'] / 127
+                                           f"model.decoder.layers.{idx}.self_attn.k_proj"]['output'] / 127
         scale_dict["v_output_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.self_attn.v_proj"]['output'] / 127
+                                           f"model.decoder.layers.{idx}.self_attn.v_proj"]['output'] / 127
         scale_dict["out_input_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.self_attn.out_proj"]['input'] / 127
+                                            f"model.decoder.layers.{idx}.self_attn.out_proj"]['input'] / 127
         scale_dict["fc1_input_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.fc1"]['input'] / 127
+                                            f"model.decoder.layers.{idx}.fc1"]['input'] / 127
         scale_dict["fc2_input_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.fc2"]["input"] / 127
+                                            f"model.decoder.layers.{idx}.fc2"]["input"] / 127
+        decoder_layer_scales.append(scale_dict)
+
+    return decoder_layer_scales
+
+
+@torch.no_grad()
+def collect_phi2_layer_scales(model, act_dict):
+    decoder_layer_scales = []
+    for idx in range(model.config.num_hidden_layers):
+        scale_dict = {}
+        # self attenion scales
+        scale_dict["attn_input_scale"] = act_dict[
+                                             f"model.layers.{idx}.self_attn.q_proj"]['input'] / 127
+        scale_dict["q_output_scale"] = act_dict[
+                                           f"model.layers.{idx}.self_attn.q_proj"]['output'] / 127
+        scale_dict["k_output_scale"] = act_dict[
+                                           f"model.layers.{idx}.self_attn.k_proj"]['output'] / 127
+        scale_dict["v_output_scale"] = act_dict[
+                                           f"model.layers.{idx}.self_attn.v_proj"]['output'] / 127
+        scale_dict["dense_input_scale"] = act_dict[
+                                              f"model.layers.{idx}.self_attn.dense"]['input'] / 127
+        # mlp scales
+        scale_dict["fc1_input_scale"] = act_dict[
+                                            f"model.layers.{idx}.mlp.fc1"]['input'] / 127
+        scale_dict["fc2_input_scale"] = act_dict[
+                                            f"model.layers.{idx}.mlp.fc2"]["input"] / 127
         decoder_layer_scales.append(scale_dict)
 
     return decoder_layer_scales
@@ -108,23 +139,24 @@ def collect_llama_layer_scales(model, act_dict):
     for idx in range(model.config.num_hidden_layers):
         scale_dict = {}
         scale_dict["attn_input_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.q_proj"]['input'] / 127
+                                             f"model.layers.{idx}.self_attn.q_proj"]['input'] / 127
         scale_dict["q_output_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.q_proj"]['output'] / 127
+                                           f"model.layers.{idx}.self_attn.q_proj"]['output'] / 127
         scale_dict["k_output_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.k_proj"]['output'] / 127
+                                           f"model.layers.{idx}.self_attn.k_proj"]['output'] / 127
         scale_dict["v_output_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.v_proj"]['output'] / 127
+                                           f"model.layers.{idx}.self_attn.v_proj"]['output'] / 127
         scale_dict["out_input_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.o_proj"]['input'] / 127
+                                            f"model.layers.{idx}.self_attn.o_proj"]['input'] / 127
         # mlp scales
         scale_dict["gate_input_scale"] = act_dict[
-            f"model.layers.{idx}.mlp.gate_proj"]['input'] / 127
+                                             f"model.layers.{idx}.mlp.gate_proj"]['input'] / 127
         scale_dict["down_input_scale"] = act_dict[
-            f"model.layers.{idx}.mlp.down_proj"]["input"] / 127
+                                             f"model.layers.{idx}.mlp.down_proj"]["input"] / 127
         decoder_layer_scales.append(scale_dict)
 
     return decoder_layer_scales
+
 
 @torch.no_grad()
 def collect_baichuan_layer_scales(model, act_dict):
@@ -132,19 +164,20 @@ def collect_baichuan_layer_scales(model, act_dict):
     for idx in range(model.config.num_hidden_layers):
         scale_dict = {}
         scale_dict["attn_input_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.W_pack"]['input'] / 127
+                                             f"model.layers.{idx}.self_attn.W_pack"]['input'] / 127
         scale_dict["attn_output_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.W_pack"]['output'] / 127
+                                              f"model.layers.{idx}.self_attn.W_pack"]['output'] / 127
         scale_dict["out_input_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.o_proj"]['input'] / 127
+                                            f"model.layers.{idx}.self_attn.o_proj"]['input'] / 127
         # mlp scales
         scale_dict["gate_input_scale"] = act_dict[
-            f"model.layers.{idx}.mlp.gate_proj"]['input'] / 127
+                                             f"model.layers.{idx}.mlp.gate_proj"]['input'] / 127
         scale_dict["down_input_scale"] = act_dict[
-            f"model.layers.{idx}.mlp.down_proj"]["input"] / 127
+                                             f"model.layers.{idx}.mlp.down_proj"]["input"] / 127
         decoder_layer_scales.append(scale_dict)
 
     return decoder_layer_scales
+
 
 @torch.no_grad()
 def collect_mixtral_layer_scales(model, act_dict):
@@ -152,18 +185,18 @@ def collect_mixtral_layer_scales(model, act_dict):
     for idx in range(model.config.num_hidden_layers):
         scale_dict = {}
         scale_dict["attn_input_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.q_proj"]['input'] / 127
+                                             f"model.layers.{idx}.self_attn.q_proj"]['input'] / 127
         scale_dict["q_output_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.q_proj"]['output'] / 127
+                                           f"model.layers.{idx}.self_attn.q_proj"]['output'] / 127
         scale_dict["k_output_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.k_proj"]['output'] / 127
+                                           f"model.layers.{idx}.self_attn.k_proj"]['output'] / 127
         scale_dict["v_output_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.v_proj"]['output'] / 127
+                                           f"model.layers.{idx}.self_attn.v_proj"]['output'] / 127
         scale_dict["out_input_scale"] = act_dict[
-            f"model.layers.{idx}.self_attn.o_proj"]['input'] / 127
+                                            f"model.layers.{idx}.self_attn.o_proj"]['input'] / 127
         # moe scales
         scale_dict["moe_input_scale"] = act_dict[
-            f"model.layers.{idx}.block_sparse_moe.gate"]['input'] / 127
+                                            f"model.layers.{idx}.block_sparse_moe.gate"]['input'] / 127
         down_input_scales = []
         num_local_experts = getattr(model.config, "num_local_experts")
         for i in range(num_local_experts):
@@ -173,13 +206,39 @@ def collect_mixtral_layer_scales(model, act_dict):
 
     return decoder_layer_scales
 
+
+@torch.no_grad()
+def collect_qwen2_layer_scales(model, act_dict):
+    decoder_layer_scales = []
+    for idx in range(model.config.num_hidden_layers):
+        scale_dict = {}
+        scale_dict["attn_input_scale"] = act_dict[
+                                             f"model.layers.{idx}.self_attn.q_proj"]['input'] / 127
+        scale_dict["q_output_scale"] = act_dict[
+                                           f"model.layers.{idx}.self_attn.q_proj"]['output'] / 127
+        scale_dict["k_output_scale"] = act_dict[
+                                           f"model.layers.{idx}.self_attn.k_proj"]['output'] / 127
+        scale_dict["v_output_scale"] = act_dict[
+                                           f"model.layers.{idx}.self_attn.v_proj"]['output'] / 127
+        scale_dict["out_input_scale"] = act_dict[
+                                            f"model.layers.{idx}.self_attn.o_proj"]['input'] / 127
+        # mlp scales
+        scale_dict["gate_input_scale"] = act_dict[
+                                             f"model.layers.{idx}.mlp.gate_proj"]['input'] / 127
+        scale_dict["down_input_scale"] = act_dict[
+                                             f"model.layers.{idx}.mlp.down_proj"]["input"] / 127
+        decoder_layer_scales.append(scale_dict)
+
+    return decoder_layer_scales
+
+
 @torch.no_grad()
 def get_static_decoder_layer_scales(model,
                                     tokenizer,
                                     dataset_path,
                                     num_samples=512,
                                     seq_len=512,
-                                    model_type = "transformers"
+                                    model_type="transformers"
                                     ):
     model.eval()
     device = next(model.parameters()).device
@@ -229,6 +288,10 @@ def get_static_decoder_layer_scales(model,
         decoder_layer_scales = collect_baichuan_layer_scales(model, act_dict)
     elif model_type == "mixtral":
         decoder_layer_scales = collect_mixtral_layer_scales(model, act_dict)
+    elif model_type == "phi2":
+        decoder_layer_scales = collect_phi2_layer_scales(model, act_dict)
+    elif model_type == "qwen2":
+        decoder_layer_scales = collect_qwen2_layer_scales(model, act_dict)
     else:
         raise ValueError(f"unsupport model type: {model_type}")
 
