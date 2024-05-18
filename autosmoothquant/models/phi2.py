@@ -13,8 +13,7 @@ from transformers.models.phi.modeling_phi import (
     PhiModel,
     PhiForCausalLM,
 )
-import sys
-sys.path.append("./smoothquant")
+
 from transformers.activations import ACT2FN
 from layers.nn.linear import W8A8BFP32OFP32LinearWithQuantScale, W8A8BFP32OFP32Linear
 from transformers.utils import logging

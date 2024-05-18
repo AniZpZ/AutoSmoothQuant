@@ -1,8 +1,7 @@
 import torch
 import torch.nn as nn
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import sys
-sys.path.append("./autosmoothquant")
+
 from models.phi2 import Int8PhiForCausalLM
 from models.llama import Int8LlamaForCausalLM
 from models.qwen2 import Int8Qwen2ForCausalLM

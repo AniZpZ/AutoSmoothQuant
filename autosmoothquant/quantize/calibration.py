@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
-import sys
 
-sys.path.append("./smoothquant")
 from datasets import load_dataset
 import functools
 from collections import defaultdict
