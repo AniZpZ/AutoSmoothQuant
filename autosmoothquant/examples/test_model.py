@@ -3,7 +3,9 @@ import torch
 import argparse
 import json
 
-from autosmoothquant.models import Int8LlamaForCausalLM, Int8OPTForCausalLM, Int8BaichuanForCausalLM, Int8MixtralForCausalLM
+from autosmoothquant.models import (Int8LlamaForCausalLM, Int8OPTForCausalLM,
+                                    Int8BaichuanForCausalLM, Int8MixtralForCausalLM,
+                                    Int8PhiForCausalLM,Int8Qwen2ForCausalLM)
 from autosmoothquant.utils import parse_quant_config
 from transformers import AutoTokenizer
 
@@ -39,6 +41,12 @@ def main():
       model = Int8OPTForCausalLM.from_pretrained(args.model_path, quant_config, attn_implementation="eager", device_map="sequential")
     elif args.model_class == "mixtral":
       model = Int8MixtralForCausalLM.from_pretrained(args.model_path, quant_config, attn_implementation="eager", device_map="sequential")
+    elif args.model_class == "phi2":
+      model = Int8PhiForCausalLM.from_pretrained(args.model_path, quant_config, attn_implementation="eager",
+                                                       device_map="sequential")
+    elif args.model_class == "qwen2":
+      model = Int8Qwen2ForCausalLM.from_pretrained(args.model_path, quant_config, attn_implementation="eager",
+                                                 device_map="sequential")
     else:
       raise ValueError(
         f"Model type {args.model_class} are not supported for now.")

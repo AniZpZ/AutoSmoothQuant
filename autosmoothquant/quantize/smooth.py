@@ -4,7 +4,9 @@ import torch.nn as nn
 from transformers.models.opt.modeling_opt import OPTDecoderLayer
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm
 from transformers.models.mixtral.modeling_mixtral import MixtralDecoderLayer, MixtralRMSNorm
-from autosmoothquant.thirdparty.baichuan.modeling_baichuan import RMSNorm, BaichuanLayer
+from transformers.models.phi.modeling_phi import PhiDecoderLayer
+from transformers.models.qwen2.modeling_qwen2 import Qwen2DecoderLayer, Qwen2RMSNorm
+from thirdparty.baichuan.modeling_baichuan import RMSNorm, BaichuanLayer
 
 
 @torch.no_grad()
@@ -20,6 +22,8 @@ def smooth_ln_fcs(ln, fcs, act_scales, model_type = "transformers", alpha=0.5):
         assert isinstance(ln, RMSNorm)
     elif model_type == "mixtral":
         assert isinstance(ln, MixtralRMSNorm)
+    elif model_type == "qwen2":
+        assert isinstance(ln, Qwen2RMSNorm)
     else:
         assert isinstance(ln, nn.LayerNorm)
 
@@ -33,7 +37,8 @@ def smooth_ln_fcs(ln, fcs, act_scales, model_type = "transformers", alpha=0.5):
               ).clamp(min=1e-5).to(device).to(dtype)
 
     ln.weight.div_(scales)
-    if model_type == "transformers":
+    # ln.bias.div_(scales)
+    if model_type == "phi2":
         ln.bias.div_(scales)
 
     for fc in fcs:
@@ -91,5 +96,24 @@ def smooth_lm(model, scales, alpha=0.5):
                 fcs.append(expert.w3)
             fcs_input_scales = scales[name + '.block_sparse_moe.gate']
             smooth_ln_fcs(ffn_ln, fcs, fcs_input_scales, "mixtral", alpha)
+        elif isinstance(module, PhiDecoderLayer):
+            print(f"smooth phi model: {name}")
+            attn_ln = module.input_layernorm
+            fc1 = module.mlp.fc1
+            # fc2 = module.mlp.fc2
+            qkvfc1 = [module.self_attn.q_proj,
+                      module.self_attn.k_proj, module.self_attn.v_proj, fc1]
+            qkv_input_scales = scales[name + '.self_attn.q_proj']
+            smooth_ln_fcs(attn_ln, qkvfc1, qkv_input_scales, "phi2", alpha)
+        elif isinstance(module, Qwen2DecoderLayer):
+            print(f"smooth qwen model: {name}")
+            attn_ln = module.input_layernorm #attention forward norm
+            qkv = [module.self_attn.q_proj,
+                   module.self_attn.k_proj, module.self_attn.v_proj]
+            qkv_input_scales = scales[name + '.self_attn.q_proj']
+            smooth_ln_fcs(attn_ln, qkv, qkv_input_scales, "qwen2", alpha)
 
-            
+            ffn_ln = module.post_attention_layernorm #feed forward norm
+            fcs = [module.mlp.gate_proj, module.mlp.up_proj]
+            fcs_input_scales = scales[name + '.mlp.gate_proj']
+            smooth_ln_fcs(ffn_ln, fcs, fcs_input_scales, "qwen2", alpha)

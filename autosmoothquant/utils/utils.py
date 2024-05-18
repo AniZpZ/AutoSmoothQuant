@@ -39,7 +39,14 @@ def parse_quant_config(config_path):
 def build_model_and_tokenizer(model_name, trust_remote_code: bool = True):
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust_remote_code, model_max_length=512)
     kwargs = {"torch_dtype": torch.float16, "device_map": "sequential"}
-    model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=trust_remote_code, **kwargs)
+    if model_name == "phi2":
+        model = PhiForCausalLM.from_pretrained(
+            model_name, device_map="auto", torch_dtype=torch.float16)
+    elif model_name == "qwen2":
+        model = Qwen2ForCausalLM.from_pretrained(
+            model_name, device_map="auto", torch_dtype=torch.float16)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=trust_remote_code, **kwargs)
     return model, tokenizer
 
 def get_model_architecture(config) -> Type[nn.Module]:
