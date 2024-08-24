@@ -30,18 +30,20 @@ For currenttly supported models, config should be like:
   "qkv": "per-tensor",
   "out": "per-tensor",
   "fc1": "per-tensor",
-  "fc2": "per-tensor"
+  "fc2": "per-tensor",
+  "type": "int8"
 }
 ```
 
 "qkv" stands for QKV matmul of attention, "out" stands for out matmul of attention.
-"fc1" and "fc2" are the layers of the FFNs, which might be referred to as "gate_up" and "down" in Llama-like models.
+"fc1" and "fc2" are the layers of the FFNs, which might be referred to as "gate_up" and "down" in Llama-like models. 
 You can set the value to "per-tensor" or "per-token" to perform the quant granularity you want.
+"type" stands for which kind of datatype you want to quantize model into. Currently we support int8 and fp8(e4m3).
 
 Once config is set, generate scales and do model quantization with following command:
 ```
 cd autosmoothquant/examples
-python3 smoothquant_model.py --model-path=/path/to/model --quantize-model=True --generate-scale=True --dataset-path=/path/to/dataset --smooth-strength=0.5
+python3 smoothquant_model.py --model-path /path/to/model --dataset-path /path/to/dataset --smooth-strength 0.5 --quantize-model --generate-scale
 ```
 
 use following command for more information 
@@ -60,7 +62,8 @@ python smoothquant_model.py -help
     "qkv": "per-tensor",
     "out": "per-token",
     "fc1": "per-tensor",
-    "fc2": "per-token"
+    "fc2": "per-token",
+    "type": "int8"
   }
   ```
   
@@ -68,7 +71,7 @@ python smoothquant_model.py -help
 - inference in this repo
 ```
 cd autosmoothquant/examples
-python3 test_model.py --model-path=/path/to/model --tokenizer-path=/path/to/tokenizer --model-class=llama --prompt="something to say"
+python3 test_model.py --model-path /path/to/model --tokenizer-path /path/to/tokenizer --model-class llama --prompt="something to say"
 ```
 
 ### benchmark

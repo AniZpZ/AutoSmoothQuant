@@ -1,12 +1,12 @@
 from .baichuan import Int8BaichuanForCausalLM
-from .llama import Int8LlamaForCausalLM
+from .llama import QuantizedLlamaForCausalLM
 from .mixtral import Int8MixtralForCausalLM
 from .opt import Int8OPTForCausalLM
 from autosmoothquant.thirdparty.baichuan.configuration_baichuan import BaichuanConfig
 
 _MODEL_REGISTRY = {
-    "LlamaForCausalLM": Int8LlamaForCausalLM,
-    "LLaMAForCausalLM": Int8LlamaForCausalLM,
+    "LlamaForCausalLM": QuantizedLlamaForCausalLM,
+    "LLaMAForCausalLM": QuantizedLlamaForCausalLM,
     "BaichuanForCausalLM": Int8BaichuanForCausalLM,
     "OPTForCausalLM": Int8OPTForCausalLM,
     "MixtralForCausalLM": Int8MixtralForCausalLM

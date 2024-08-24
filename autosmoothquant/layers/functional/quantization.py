@@ -1,7 +1,11 @@
 import torch
 import numpy as np
+import transformers
+import gc
+import re
+from typing import Optional, Tuple
 
-
+##### Int8 quantization #####
 @torch.no_grad()
 def quantize_per_tensor_absmax(t):
     scale = t.abs().max() / 127
@@ -114,3 +118,94 @@ def dequantize_activation_w_per_channel_a_per_tensor(q_act, w_scales, a_scales):
     q_act = q_act.to(torch.float32)
     q_act = q_act * w_scales.reshape(1, -1) * a_scales
     return q_act.to(dtype)
+
+
+##### FP8 quantization #####
+# adapt from https://github.com/neuralmagic/AutoFP8/blob/main/auto_fp8/quantize.py
+# TODO(huangtingwei): support fine grained quantization
+def new_dtype_byte_size(dtype):
+    if dtype == torch.bool:
+        return 1 / 8
+    bit_search = re.search(r"[^\d](\d+)_?", str(dtype))
+    if bit_search is None:
+        raise ValueError(f"`dtype` is not a valid dtype: {dtype}.")
+    bit_size = int(bit_search.groups()[0])
+    return bit_size // 8
+
+
+transformers.modeling_utils.dtype_byte_size = new_dtype_byte_size
+
+
+def cleanup_memory():
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+def per_tensor_quantize_fp8(tensor: torch.Tensor) -> Tuple[torch.Tensor, float]:
+    """Quantize a tensor using per-tensor static scaling factor.
+    Args:
+        tensor: The input tensor.
+    """
+    finfo = torch.finfo(torch.float8_e4m3fn)
+    # Calculate the scale as dtype max divided by absmax.
+    # Since .abs() creates a new tensor, we use aminmax to get
+    # the min and max first and then calculate the absmax.
+    if tensor.numel() == 0:
+        # Deal with empty tensors (triggered by empty MoE experts)
+        min_val, max_val = (
+            torch.tensor(-16.0, dtype=tensor.dtype),
+            torch.tensor(16.0, dtype=tensor.dtype),
+        )
+    else:
+        min_val, max_val = tensor.aminmax()
+    amax = torch.maximum(min_val.abs(), max_val.abs())
+    scale = amax / finfo.max
+    # scale and clamp the tensor to bring it to
+    # the representative range of float8 data type
+    # (as default cast is unsaturated)
+    qweight = (tensor / scale).clamp(min=finfo.min, max=finfo.max)
+    # Return both float8 data and the inverse scale (as float),
+    # as both required as inputs to torch._scaled_mm
+    qweight = qweight.to(torch.float8_e4m3fn)
+    return qweight, scale
+
+
+def per_token_quantize_fp8(tensor: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Quantize a tensor using per-token scaling factor.
+    Args:
+        tensor: The input tensor.
+    """
+    finfo = torch.finfo(torch.float8_e4m3fn)
+    # Calculate the scale as dtype max divided by absmax.
+    # Since .abs() creates a new tensor, we use aminmax to get
+    # the min and max first and then calculate the absmax.
+    assert tensor.numel() > 0
+    scale = tensor.abs().max(dim=-1, keepdim=True)[0].div(finfo.max).to(torch.float32)
+    # scale and clamp the tensor to bring it to
+    # the representative range of float8 data type
+    # (as default cast is unsaturated)
+    qweight = (tensor / scale).clamp(min=finfo.min, max=finfo.max)
+    # Return both float8 data and the inverse scale (as float),
+    # as both required as inputs to torch._scaled_mm
+    qweight = qweight.to(torch.float8_e4m3fn)
+    return qweight, scale
+
+
+def fake_per_tensor_quantize_fp8(tensor: torch.Tensor):
+    finfo = torch.finfo(torch.float8_e4m3fn)
+    assert tensor.numel() > 0
+    scale = tensor.abs().max().div(finfo.max).to(torch.float32)
+    qweight = (tensor / scale).clamp(min=finfo.min, max=finfo.max).mul(scale)
+    return qweight
+
+def fake_per_token_quantize_fp8(tensor: torch.Tensor):
+    finfo = torch.finfo(torch.float8_e4m3fn)
+    assert tensor.numel() > 0
+    scale = tensor.abs().max(dim=-1, keepdim=True)[0].div(finfo.max).to(torch.float32)
+    qweight = (tensor / scale).clamp(min=finfo.min, max=finfo.max).mul(scale)
+    return qweight
+
+def static_per_tensor_quantize_fp8(tensor: torch.Tensor, inv_scale: float) -> torch.Tensor:
+    finfo = torch.finfo(torch.float8_e4m3fn)
+    qweight = (tensor / inv_scale).clamp(min=finfo.min, max=finfo.max)
+    return qweight.to(torch.float8_e4m3fn)
