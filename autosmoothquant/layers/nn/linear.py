@@ -1,6 +1,16 @@
+import gc
+import re
+from typing import Optional, Tuple
+import copy
+
 import torch
 import threading
-from ..functional.quantization import quantize_per_tensor_absmax
+from ..functional.quantization import (
+    quantize_per_tensor_absmax,
+    per_tensor_quantize_fp8,
+    per_token_quantize_fp8,
+    static_per_tensor_quantize_fp8
+)
 from autosmoothquant._CUDA import I8CUGEMM
 
 
@@ -98,7 +108,7 @@ class W8A8BFP32OFP32Linear(torch.nn.Module):
     @staticmethod
     def from_float(
         module: torch.nn.Linear,
-        input_scale,
+        input_scale=1.0,
         save_device=torch.device("cpu"),
         act_quant="per-tensor",
     ):
@@ -317,3 +327,318 @@ class W8A8BFP32OFP32LinearWithQuantScale(W8A8BFP32OFP32Linear):
         if int8_module.use_bias:
             int8_module.bias = module.bias.to(torch.float32).to(save_device)
         return int8_module
+
+
+##### fp8 linear #####
+# adapt from https://github.com/neuralmagic/AutoFP8/blob/main/auto_fp8/quantize.py
+# TODO(huangtingwei): replace gemm with cutlass fp8 gemm
+
+def easy_fp8_gemm(A, A_scale, B, B_scale, bias, out_dtype):
+    if A.numel() == 0:
+        # Deal with empty tensors (triggeted by empty MoE experts)
+        return torch.empty(size=(0, B.shape[0]), dtype=out_dtype, device=A.device)
+
+    # Note: testing with L20/L40
+    native_fp8_support = False
+    if native_fp8_support:
+        need_reshape = A.dim() == 3
+        if need_reshape:
+            batch_size = A.shape[0]
+            A_input = A.reshape(-1, A.shape[-1])
+        else:
+            batch_size = None
+            A_input = A
+        output, _ = torch._scaled_mm(
+            A_input,
+            B.t(),
+            out_dtype=out_dtype,
+            scale_a=A_scale.to(A.device),
+            scale_b=B_scale.to(B.device),
+            bias=bias,
+        )
+        if need_reshape:
+            output = output.reshape(
+                batch_size, output.shape[0] // batch_size, output.shape[1]
+            )
+    else:
+        output = torch.nn.functional.linear(
+            A.to(out_dtype) * A_scale,
+            B.to(out_dtype) * B_scale,
+            bias=bias,
+        )
+    return output.to(out_dtype)
+
+
+# per-token quant for activation
+class FP8LinearDynamic(torch.nn.Module):
+    def __init__(
+            self,
+            in_features,
+            out_features,
+            act_quant,
+            use_bias=False,
+    ):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.act_quant = act_quant
+        self.use_bias = use_bias
+
+        self.register_buffer(
+            "weight",
+            torch.empty(
+                self.out_features,
+                self.in_features,
+                dtype=torch.float8_e4m3fn,
+                requires_grad=False,
+            ),
+        )
+        if self.use_bias:
+            self.register_buffer(
+                "bias",
+                torch.empty(self.out_features, dtype=torch.float32, requires_grad=False
+                            ),
+            )
+        # currently only per-tensor
+        self.register_buffer(
+            "weight_scale", torch.tensor(1.0, dtype=torch.float32, requires_grad=False)
+        )
+
+    def _apply(self, fn):
+        # prevent the bias from being converted to half
+        super()._apply(fn)
+        self.weight_scale = self.weight_scale.cpu()
+        return self
+
+    def forward(self, x):
+        if self.act_quant == "per-token":
+            qinput, x_scale = per_token_quantize_fp8(x)
+        else:
+            qinput, x_scale = per_tensor_quantize_fp8(x)
+        # dequant have been fused in easy_fp8_gemm
+        output = easy_fp8_gemm(
+            A=qinput,
+            A_scale=x_scale,
+            B=self.weight,
+            B_scale=self.weight_scale,
+            bias=self.bias if self.use_bias else None,
+            out_dtype=x.dtype,
+        )
+        return output
+
+    @staticmethod
+    def from_float(
+            module: torch.nn.Linear,
+            input_scale=1.0,
+            save_device=torch.device("cpu"),
+            act_quant="per-token",
+    ):
+        # dynamic scale only support per token activation quant
+        assert act_quant == "per-token"
+        quant_weight, weight_scale = per_tensor_quantize_fp8(module.weight)
+        # assert torch.allclose(dequant_weight, module.weight, atol=tolerance)
+        bias = copy.deepcopy(module.bias) if module.bias is not None else None
+        alpha = input_scale * weight_scale
+        # only support dynamic per token quant here
+        use_bias = False if module.bias is None else True
+        fp8_module = FP8LinearDynamic(
+            module.in_features, module.out_features, use_bias
+        )
+        fp8_module.weight = quant_weight
+        fp8_module.weight_scale = alpha
+        if use_bias:
+            fp8_module.bias = bias
+
+        return fp8_module
+
+
+class FP8StaticLinearQuantizer(torch.nn.Module):
+    def __init__(
+            self,
+            in_features: int,
+            out_features: int,
+            weight: torch.Tensor,
+            weight_scale: torch.Tensor,
+            bias: torch.nn.Parameter,
+            quantize_output: bool = False,
+    ):
+        super().__init__()
+        self.weight = torch.nn.Parameter(weight, requires_grad=False)
+        self.weight_scale = torch.nn.Parameter(weight_scale, requires_grad=False)
+        self.bias = bias
+        self.input_scale = None
+        self.output_scale = None
+        self.quantize_output = quantize_output
+
+        self.in_features = in_features
+        self.out_features = out_features
+
+    def forward(self, x):
+        qinput, x_input_scale = per_tensor_quantize_fp8(x)
+        if self.input_scale is None:
+            self.input_scale = torch.nn.Parameter(x_input_scale, requires_grad=False)
+        elif x_input_scale > self.input_scale:
+            self.input_scale = torch.nn.Parameter(x_input_scale, requires_grad=False)
+        output = easy_fp8_gemm(
+            A=qinput,
+            A_scale=self.input_scale,
+            B=self.weight,
+            B_scale=self.weight_scale,
+            bias=self.bias,
+            out_dtype=x.dtype,
+        )
+
+        # Optionally, quantize output and record scale
+        if self.quantize_output:
+            qoutput, output_scale = per_tensor_quantize_fp8(output)
+            if self.output_scale is None:
+                self.output_scale = torch.nn.Parameter(output_scale, requires_grad=False)
+            elif output_scale > self.output_scale:
+                self.output_scale = torch.nn.Parameter(output_scale, requires_grad=False)
+            output = qoutput.to(output.dtype) * output_scale
+
+        return output
+
+
+class FP8LinearStatic(torch.nn.Module):
+    def __init__(
+            self,
+            in_features,
+            out_features,
+            use_bias=False,
+    ):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.use_bias = use_bias
+
+        self.register_buffer(
+            "weight",
+            torch.empty(
+                self.out_features,
+                self.in_features,
+                dtype=torch.float8_e4m3fn,
+                requires_grad=False,
+            ),
+        )
+        if self.use_bias:
+            self.register_buffer(
+                "bias",
+                torch.empty(self.out_features, dtype=torch.float32, requires_grad=False
+                            ),
+            )
+        # currently only per-tensor
+        self.register_buffer(
+            "weight_scale", torch.tensor(1.0, dtype=torch.float32, requires_grad=False)
+        )
+        # currently only per-tensor
+        self.register_buffer(
+            "input_scale", torch.tensor(1.0, dtype=torch.float32, requires_grad=False)
+        )
+        # currently only per-tensor
+        self.register_buffer(
+            "output_scale", torch.tensor(1.0, dtype=torch.float32, requires_grad=False)
+        )
+
+    def _apply(self, fn):
+        # prevent the bias from being converted to half
+        super()._apply(fn)
+        self.weight_scale = self.weight_scale.cpu()
+        self.input_scale = self.input_scale.cpu()
+        self.output_scale = self.output_scale.cpu()
+        return self
+
+    def forward(self, x):
+        qinput = static_per_tensor_quantize_fp8(x, self.input_scale)
+        output = easy_fp8_gemm(
+            A=qinput,
+            A_scale=self.input_scale,
+            B=self.weight,
+            B_scale=self.weight_scale,
+            bias=self.bias if self.use_bias else None,
+            out_dtype=x.dtype,
+        )
+
+        if self.output_scale:
+            qoutput = static_per_tensor_quantize_fp8(output, self.output_scale)
+            output = qoutput.to(output.dtype) * self.output_scale
+
+        return output
+
+    @staticmethod
+    def from_float(
+            quantizer: torch.nn.Linear,
+    ):
+        use_bias = False if quantizer.bias is None else True
+        fp8_module = FP8LinearStatic(quantizer.in_features, quantizer.out_features, use_bias)
+        fp8_module.weight = quantizer.weight
+        if use_bias:
+            fp8_module.bias = quantizer.bias
+        fp8_module.weight_scale = quantizer.weight_scale
+        fp8_module.input_scale = quantizer.input_scale
+        fp8_module.output_scale = quantizer.output_scale
+        return fp8_module
+
+
+class FP8E5M2Linear(torch.nn.Module):
+    def __init__(
+            self,
+            in_features,
+            out_features,
+            use_bias=False,
+    ):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.use_bias = use_bias
+
+        self.register_buffer(
+            "weight",
+            torch.empty(
+                self.out_features,
+                self.in_features,
+                dtype=torch.float8_e5m2,
+                requires_grad=False,
+            ),
+        )
+        if self.use_bias:
+            self.register_buffer(
+                "bias",
+                torch.empty(self.out_features, dtype=torch.float32, requires_grad=False
+                            ),
+            )
+
+    def _apply(self, fn):
+        # prevent the bias from being converted to half
+        super()._apply(fn)
+        return self
+
+    def forward(self, x):
+        out_dtype = x.dtype
+        qinput = x.to(torch.float8_e5m2)
+        output, _ = torch._scaled_mm(qinput,
+                                     self.weight,
+                                     out_dtype=out_dtype,
+                                     scale_a=None,
+                                     scale_b=None,
+                                     bias=self.bias)
+
+        return output
+
+    @staticmethod
+    def from_float(
+            module: torch.nn.Linear,
+    ):
+        quant_weight = module.weight.to(torch.float8_e5m2)
+        bias = copy.deepcopy(module.bias) if module.bias is not None else None
+        use_bias = False if module.bias is None else True
+
+        fp8_module = FP8E5M2Linear(
+            module.in_features, module.out_features, use_bias=use_bias
+        )
+
+        fp8_module.weight = quant_weight
+        if use_bias:
+            fp8_module.bias = bias
+
+        return fp8_module

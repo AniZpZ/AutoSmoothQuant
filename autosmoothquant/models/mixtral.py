@@ -4,7 +4,7 @@ from transformers.models.mixtral.modeling_mixtral import (
     MixtralRMSNorm,
     MixtralRotaryEmbedding,
     MixtralAttention,
-    MixtralBLockSparseTop2MLP,
+    MixtralBlockSparseTop2MLP,
     MixtralSparseMoeBlock,
     MixtralDecoderLayer,
     MixtralPreTrainedModel,
@@ -91,7 +91,7 @@ class Int8MixtralAttention(nn.Module):
         int8_module.o_proj = W8A8BFP32OFP32LinearWithQuantScale.from_float(module.o_proj, out_input_scale, act_quant=quant_config["out"])
         return int8_module
 
-class Int8MixtralBLockSparseTop2MLP(nn.Module):
+class Int8MixtralBlockSparseTop2MLP(nn.Module):
     def __init__(self, config: MixtralConfig, quant_config: dict[str, str]):
         super().__init__()
         self.ffn_dim = config.intermediate_size
@@ -102,15 +102,15 @@ class Int8MixtralBLockSparseTop2MLP(nn.Module):
 
         self.act_fn = ACT2FN[config.hidden_act]
 
-    forward = MixtralBLockSparseTop2MLP.forward
+    forward = MixtralBlockSparseTop2MLP.forward
 
     @staticmethod
-    def from_float(module: MixtralBLockSparseTop2MLP,
+    def from_float(module: MixtralBlockSparseTop2MLP,
                    config: MixtralConfig,
                    quant_config: dict[str, str],
                    moe_input_scale: float,
                    down_input_scale: float):
-        int8_module = Int8MixtralBLockSparseTop2MLP(config, quant_config)
+        int8_module = Int8MixtralBlockSparseTop2MLP(config, quant_config)
         int8_module.w1 = W8A8BFP32OFP32Linear.from_float(module.w1, moe_input_scale, act_quant=quant_config["fc1"])
         int8_module.w2 = W8A8BFP32OFP32LinearWithQuantScale.from_float(module.w2, down_input_scale, act_quant=quant_config["fc2"])
         int8_module.w3 = W8A8BFP32OFP32Linear.from_float(module.w3, moe_input_scale, act_quant=quant_config["fc1"])
@@ -136,10 +136,11 @@ class Int8MixtralSparseMoeBlock(nn.Module):
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
 
-        # We do not apply quant to gate for now, as it greatly affects the model performance 
+        # We do not apply quant to gate for now, as it greatly affects the model performance
         self.gate = nn.Linear(self.hidden_dim, self.num_experts, bias=False)
 
-        self.experts = nn.ModuleList([Int8MixtralBLockSparseTop2MLP(config, quant_config) for _ in range(self.num_experts)])
+        self.experts = nn.ModuleList(
+            [Int8MixtralBlockSparseTop2MLP(config, quant_config) for _ in range(self.num_experts)])
 
     forward = MixtralSparseMoeBlock.forward
 
@@ -152,7 +153,7 @@ class Int8MixtralSparseMoeBlock(nn.Module):
         int8_module = Int8MixtralSparseMoeBlock(config, quant_config)
         int8_module.gate = module.gate
         for i, expert in enumerate(module.experts):
-            int8_module.experts[i] = Int8MixtralBLockSparseTop2MLP.from_float(
+            int8_module.experts[i] = Int8MixtralBlockSparseTop2MLP.from_float(
                 expert, config, quant_config, moe_input_scale, down_input_scales[i]
             )
         return int8_module

@@ -1,3 +1,8 @@
+import copy
+import gc
+import re
+from typing import List
+
 import torch
 import torch.nn as nn
 
@@ -8,6 +13,10 @@ from collections import defaultdict
 from functools import partial
 import numpy as np
 from tqdm import tqdm
+from transformers import AutoModelForCausalLM
+
+from autosmoothquant.layers.functional.quantization import per_tensor_quantize_fp8
+from autosmoothquant.layers.nn.linear import FP8StaticLinearQuantizer
 from autosmoothquant.models import _MODEL_TYPE
 
 
@@ -233,3 +242,98 @@ def get_static_decoder_layer_scales(model,
         raise ValueError(f"unsupport model type: {model_type}")
 
     return decoder_layer_scales, act_dict
+
+
+def replace_module(model: AutoModelForCausalLM, name: str, new_module: torch.nn.Module):
+    if "." in name:
+        parent_name = name.rsplit(".", 1)[0]
+        child_name = name[len(parent_name) + 1:]
+        parent = model.get_submodule(parent_name)
+    else:
+        parent_name = ""
+        parent = model
+        child_name = name
+    setattr(parent, child_name, new_module)
+
+
+def get_layers_to_ignore(model, ignore_patterns) -> List[str]:
+    ignored_layers = set()
+
+    for name, linear in model.named_modules():
+        if not isinstance(linear, torch.nn.Linear):
+            continue
+
+        for ignore_pattern in ignore_patterns:
+            regex_prefix = "re:"
+            if ignore_pattern.startswith(regex_prefix):
+                # check if name matches regex and add to set if true
+                regex_pattern = ignore_pattern[len(regex_prefix):]
+                if re.search(regex_pattern, name):
+                    ignored_layers.add(name)
+            else:
+                # else, exact match
+                if ignore_pattern == name:
+                    ignored_layers.add(name)
+
+    return list(ignored_layers)
+
+
+def cleanup_memory():
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+"""
+ Inspired by https://github.com/neuralmagic/AutoFP8/blob/main/auto_fp8/quantize.py#L249
+"""
+
+
+@torch.no_grad()
+def quantize_activations_fp8(
+        model,
+        tokenizer,
+        calibration_path,
+        ignore_patterns,
+        num_samples
+):
+    # Replace weight quantizer with a dynamic activation quantizer observer
+    ignored_layers = get_layers_to_ignore(
+        model, ignore_patterns
+    )
+    named_modules = list(model.named_modules())
+    for name, linear in tqdm(named_modules, desc="Quantizing weights"):
+        if not isinstance(linear, torch.nn.Linear) or name in ignored_layers:
+            continue
+        quant_weight, weight_scale = per_tensor_quantize_fp8(linear.weight)
+        bias = copy.deepcopy(linear.bias) if linear.bias is not None else None
+
+        quant_weight = quant_weight.to(linear.weight.data.device)
+        if bias is not None:
+            bias = bias.to(bias.data.device)
+
+        quantizer = FP8StaticLinearQuantizer(
+            linear.in_features,
+            linear.out_features,
+            weight=quant_weight,
+            weight_scale=weight_scale,
+            bias=bias,
+            quantize_output=False,
+        )
+        replace_module(model, name, quantizer)
+        del linear.weight
+        del linear.bias
+        del linear
+    cleanup_memory()
+
+    dataset = load_dataset("json", data_files=calibration_path, split="train")
+    dataset = dataset.shuffle(seed=42)
+    device = next(model.parameters()).device
+
+    with tqdm(total=num_samples, desc="Calibrating activation scales") as pbar:
+        for i in range(num_samples):
+            input_ids = tokenizer(dataset[i]["text"], return_tensors="pt",
+                                  max_length=1024, truncation=True).input_ids.to(device)
+            model(input_ids)
+            cleanup_memory()
+            pbar.update(1)
+

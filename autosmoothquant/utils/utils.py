@@ -2,6 +2,8 @@ from typing import Optional, Type
 import json
 import torch
 from torch import nn
+import numpy as np
+import random
 
 from transformers import AutoTokenizer
 from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
@@ -50,3 +52,10 @@ def get_model_architecture(config) -> Type[nn.Module]:
     raise ValueError(
         f"Model architectures {architectures} are not supported for now. "
         f"Supported architectures: {list(_MODEL_REGISTRY.keys())}")
+
+def setup_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
